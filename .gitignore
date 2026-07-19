@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.venv/
+.env
+
+# Office lock / temp files
+~$*.pptx
+~$*.docx
+~$*.xlsx
+
+# Old / draft presentation artifacts (kept locally only)
+task1-presentation/RadixAttention_Presentation*.pptx
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp

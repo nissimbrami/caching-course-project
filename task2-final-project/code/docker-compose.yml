@@ -1,0 +1,13 @@
+services:
+  benchmark:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gdsf-benchmark
+    volumes:
+      - ./results:/app/results
+    environment:
+      - PYTHONPATH=/app
+      - CACHE_SIZE=1000
+      - NUM_RUNS=10
+    command: ["bash", "scripts/run_all.sh"]

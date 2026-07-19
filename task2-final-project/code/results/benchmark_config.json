@@ -1,0 +1,27 @@
+{
+  "n_runs": 30,
+  "cache_sizes": [
+    50000,
+    100000,
+    250000,
+    500000
+  ],
+  "policies": [
+    "LRU",
+    "FIFO",
+    "LFU",
+    "Random",
+    "GDSF"
+  ],
+  "workloads": [
+    "uniform_cost",
+    "high_variance_cost",
+    "zipf_variable_cost",
+    "bursty",
+    "adversarial_lru",
+    "size_varying"
+  ],
+  "seed": 42,
+  "elapsed_seconds": 277.72271394729614,
+  "timestamp": "2026-07-19 18:38:22"
+}

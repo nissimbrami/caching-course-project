@@ -247,13 +247,17 @@ class GDSFEvictionManager:
         """Evict the item with the lowest priority.
 
         Advances the clock to the priority of the evicted item (GDSF inflation).
+        The clock is monotone non-decreasing: if the evicted item's priority
+        is below the current clock (which can only happen when a duplicate
+        put grew an entry's size and pushed its recomputed priority below
+        the clock), the clock is left where it was.
 
         Returns:
             The key of the evicted item.
         """
         key, priority = self._heap.pop()
-        # Advance clock to evicted item's priority
-        self._clock = priority
+        if priority > self._clock:
+            self._clock = priority
         meta = self._metadata.pop(key)
         self._current_size -= meta["size"]
         return key
@@ -272,7 +276,8 @@ class GDSFEvictionManager:
                 if key == protected_key:
                     stashed.append((key, priority))
                     continue
-                self._clock = priority
+                if priority > self._clock:
+                    self._clock = priority
                 meta = self._metadata.pop(key)
                 self._current_size -= meta["size"]
                 # Restore stashed items

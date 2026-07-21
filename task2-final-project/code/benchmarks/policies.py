@@ -8,12 +8,11 @@ byte capacity.
 """
 
 from abc import ABC, abstractmethod
-from collections import OrderedDict, defaultdict
-from dataclasses import dataclass, field
+from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
-import heapq
 import random
-import math
+
+from src.cost_aware_eviction import GDSFEvictionManager
 
 
 class CachePolicy(ABC):
@@ -276,25 +275,14 @@ class RandomPolicy(CachePolicy):
         return "Random"
 
 
-@dataclass(order=True)
-class _GDSFEntry:
-    """Internal entry for the GDSF priority queue."""
-    priority: float
-    key: str = field(compare=False)
-    size: int = field(compare=False)
-    cost: float = field(compare=False)
-    freq: int = field(compare=False)
-    valid: bool = field(default=True, compare=False)
-
-
 class GDSFPolicy(CachePolicy):
     """Greedy Dual-Size Frequency (GDSF) eviction policy.
 
     Priority = Clock + freq^alpha * cost^beta / size
 
-    This is the cost-aware eviction policy that forms the core enhancement
-    of this project. It generalizes LRU/LFU by incorporating both the cost
-    of regenerating an item and its size into eviction decisions.
+    This is a thin adapter over the canonical GDSFEvictionManager from
+    src.cost_aware_eviction so that the benchmark harness and the unit
+    tests measure the exact same implementation.
 
     Args:
         max_size: Maximum cache capacity in bytes.
@@ -311,95 +299,24 @@ class GDSFPolicy(CachePolicy):
         super().__init__(max_size)
         self._alpha = alpha
         self._beta = beta
-        self._clock: float = 0.0  # Aging mechanism (inflation counter)
-        self._heap: List[_GDSFEntry] = []  # Min-heap by priority
-        self._entries: Dict[str, _GDSFEntry] = {}  # key -> current entry
-        self._freq: Dict[str, int] = defaultdict(int)  # key -> access count
-
-    def _compute_priority(self, freq: int, cost: float, size: int) -> float:
-        """Compute GDSF priority value.
-
-        Priority = Clock + freq^alpha * cost^beta / size
-        Higher priority = more valuable = evicted later.
-        """
-        size_factor = max(size, 1)  # avoid division by zero
-        return self._clock + (freq ** self._alpha) * (cost ** self._beta) / size_factor
+        self._manager = GDSFEvictionManager(
+            max_size=max_size, alpha=alpha, beta=beta
+        )
 
     def put(self, key: str, size: int, cost: float) -> List[str]:
-        evicted: List[str] = []
-
-        # Remove existing entry if present
-        if key in self._entries:
-            old_entry = self._entries[key]
-            old_entry.valid = False  # Mark as invalid (lazy deletion)
-            self.current_size -= old_entry.size
-            del self._entries[key]
-
-        # Evict until there is room
-        while self.current_size + size > self.max_size and self._entries:
-            # Pop the minimum priority entry
-            while self._heap:
-                entry = heapq.heappop(self._heap)
-                if entry.valid:
-                    # This is the victim
-                    self._clock = entry.priority  # Advance clock
-                    self.current_size -= entry.size
-                    del self._entries[entry.key]
-                    if entry.key in self._freq:
-                        del self._freq[entry.key]
-                    evicted.append(entry.key)
-                    break
-            else:
-                # Heap exhausted (shouldn't happen if entries exist)
-                break
-
-        # Insert new entry
-        if size <= self.max_size:
-            self._freq[key] = 1
-            priority = self._compute_priority(1, cost, size)
-            entry = _GDSFEntry(
-                priority=priority,
-                key=key,
-                size=size,
-                cost=cost,
-                freq=1,
-            )
-            heapq.heappush(self._heap, entry)
-            self._entries[key] = entry
-            self.current_size += size
-
-        return evicted
+        evicted = self._manager.put(key, size=size, cost=cost)
+        self.current_size = self._manager.current_size
+        return list(evicted)
 
     def access(self, key: str) -> bool:
-        if key not in self._entries:
-            return False
-
-        # Update frequency and recompute priority
-        old_entry = self._entries[key]
-        old_entry.valid = False  # Invalidate old heap entry
-
-        self._freq[key] += 1
-        new_priority = self._compute_priority(
-            self._freq[key], old_entry.cost, old_entry.size
-        )
-
-        new_entry = _GDSFEntry(
-            priority=new_priority,
-            key=key,
-            size=old_entry.size,
-            cost=old_entry.cost,
-            freq=self._freq[key],
-        )
-        heapq.heappush(self._heap, new_entry)
-        self._entries[key] = new_entry
-
-        return True
+        hit = self._manager.access(key)
+        self.current_size = self._manager.current_size
+        return hit
 
     def reset(self) -> None:
-        self._clock = 0.0
-        self._heap.clear()
-        self._entries.clear()
-        self._freq.clear()
+        self._manager = GDSFEvictionManager(
+            max_size=self.max_size, alpha=self._alpha, beta=self._beta
+        )
         self.current_size = 0
 
     @property

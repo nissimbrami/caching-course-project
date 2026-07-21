@@ -1,0 +1,37 @@
+name: Build LaTeX report
+
+on:
+  push:
+    paths:
+      - "task2-final-project/report-latex/**"
+      - ".github/workflows/build-latex.yml"
+  pull_request:
+    paths:
+      - "task2-final-project/report-latex/**"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile report.tex (pdfLaTeX + BibTeX)
+        uses: xu-cheng/latex-action@v3
+        with:
+          root_file: report.tex
+          working_directory: task2-final-project/report-latex
+          latexmk_use_lualatex: false
+          latexmk_use_xelatex: false
+          # -pdf drives pdfLaTeX; latexmk handles the pdflatex/bibtex/pdflatex/pdflatex cycle.
+          args: -pdf -file-line-error -halt-on-error -interaction=nonstopmode
+
+      - name: Upload built PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-pdf
+          path: task2-final-project/report-latex/report.pdf
+          if-no-files-found: error

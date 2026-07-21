@@ -271,18 +271,23 @@ def s_title(prs):
 
 def s_agenda(prs):
     s = _blank(prs)
-    _title(s, "Agenda")
+    _title(s, "Agenda  ·  ~60 minutes")
     items = [
-        "The problem: LLMs cannot stream past their training window",
-        "Course anchor: this is a cache eviction policy",
-        "The observation: attention sinks",
-        "The mechanism: sinks + rolling KV cache",
-        "The pre-training variant: a learnable sink token",
-        "Results: perplexity, throughput, streaming QA",
-        "Limitations: cache size is still the ceiling",
-        "What I would change (and how it bridges to my final project)",
+        "Basics — LLM decoding, KV cache, why this is a caching problem",
+        "Related work — length extrapolation, context extension, sparse attn",
+        "The observation — attention sinks are position, not semantics",
+        "The mechanism — sinks + rolling cache + cache-local position IDs",
+        "Mechanism deep-dive — worked example, RoPE / ALiBi variants, algorithm box",
+        "Sink-Token pre-training — the §3.3 refinement + its 160M caveat",
+        "Results — perplexity to 4M tokens, 22.2× throughput, streaming QA",
+        "Results deep-dive — Fig. 5, Fig. 10, Table 5, StreamEval",
+        "Modern alternatives — H2O, SnapKV, Scissorhands, FastGen",
+        "Limitations — LongBench, non-monotone cache, positional-only ceiling",
+        "Live implementation walkthrough — ~50 lines of PyTorch + HF",
+        "What I would change — bridge to my Task-2 GDSF project",
+        "Q&A prep",
     ]
-    _bullets(s, items, top_in=1.7, size=22, spacing=10)
+    _bullets(s, items, top_in=1.55, size=17, spacing=6)
     return s
 
 
@@ -712,7 +717,778 @@ def s_what_id_change(prs):
     return s
 
 
-# --- Conclusion + Thank you ---------------------------------------------
+# --- Related work section -------------------------------------------------
+
+
+def s_section_related(prs):
+    s = _blank(prs)
+    _box(s, 0, 0, 13.33, 7.5, fill=NAVY, line=NAVY)
+    _plain_text(s, "Related work", 0.7, 3.0, 12.0, 1.2,
+                size=54, bold=True, color=BG)
+    _box(s, 0.7, 4.1, 6.0, 0.05, fill=ACCENT, line=ACCENT)
+    _plain_text(s, "Where StreamingLLM sits in the 2024 landscape",
+                0.7, 4.3, 12.0, 0.5, size=22, color=BG)
+    return s
+
+
+def s_related_length_extrap(prs):
+    s = _blank(prs)
+    _title(s, "Related work 1/3: length-extrapolation encodings")
+    _bullets(s, [
+        "RoPE (Su et al., 2021) — encodes absolute position as a rotation "
+        "of the query/key vectors; relative-position property falls out.",
+        "ALiBi (Press et al., 2022) — no positional embedding at all; "
+        "adds a linear bias -m·|i-j| to attention logits.",
+        "xPos (Sun et al., 2022) — RoPE with exponential decay, aimed "
+        "at improving long-range stability.",
+        "T5 relative bias (Raffel et al., 2020) — bucketed learned bias.",
+    ], top_in=1.55, size=18)
+    _labelled_box(s, 0.7, 4.9, 12.0, 1.95,
+                  "Why StreamingLLM cares",
+                  "These are the encodings the paper must plug into "
+                  "unchanged. §3.2 shows the cache-local re-indexing "
+                  "rule for RoPE (rotate at decode using cache-index) "
+                  "and ALiBi (contiguous bias in cache coordinates). "
+                  "The paper is deliberately encoding-agnostic — it is "
+                  "a KV-cache policy, not a new positional scheme.",
+                  fill=LIGHT, border=BLUE,
+                  label_size=15, sub_size=14, sub_color=TEXT)
+    return s
+
+
+def s_related_context_ext(prs):
+    s = _blank(prs)
+    _title(s, "Related work 2/3: context-window extension")
+    _bullets(s, [
+        "Position Interpolation (Chen et al., 2023) — linearly "
+        "interpolate RoPE indices to a longer window; needs "
+        "fine-tuning.",
+        "YaRN (Peng et al., 2023) — NTK-aware frequency scaling; "
+        "less fine-tuning, longer context.",
+        "LongRoPE (Ding et al., 2024) — evolutionary search over RoPE "
+        "rescalings.",
+        "FlashAttention (Dao 2022, 2023) — makes O(T²) attention "
+        "*possible* at long T; orthogonal, not competitive.",
+        "Landmark Attention, Focused Transformer — retrieval-style hooks.",
+    ], top_in=1.55, size=17)
+    _labelled_box(s, 0.7, 5.35, 12.0, 1.5,
+                  "Different problem",
+                  "These methods try to grow the pre-training window. "
+                  "StreamingLLM keeps the window bounded and lets the "
+                  "*stream* grow. Complementary, not competitive.",
+                  fill=LIGHT, border=BLUE,
+                  label_size=15, sub_size=14, sub_color=TEXT)
+    return s
+
+
+def s_related_sparse_and_lminf(prs):
+    s = _blank(prs)
+    _title(s, "Related work 3/3: sparse attention and concurrent work")
+    _bullets(s, [
+        "Sparse Transformer (Child et al., 2019), Longformer (Beltagy "
+        "et al., 2020), BigBird (Zaheer et al., 2020), ETC (Ainslie "
+        "et al., 2020) — structured sparsity + global tokens. "
+        "Need custom kernels; not drop-in on pre-trained decoders.",
+        "LM-Infinite (Han et al., 2023) — concurrent with StreamingLLM; "
+        "Λ-shaped attention pattern (keep initial tokens + local band).",
+        "Landmark Attention (Mohtashami & Jaggi, 2023) — retrieval-style "
+        "distant memory access.",
+    ], top_in=1.55, size=17)
+    _labelled_box(s, 0.7, 5.05, 12.0, 1.8,
+                  "How StreamingLLM differentiates itself",
+                  "First to (a) *name* the attention-sink phenomenon and "
+                  "show it exists across Llama-2 / MPT / Falcon / Pythia "
+                  "/ BERT / ViT; (b) show that the sinks are "
+                  "*positional, not semantic* (linebreak substitution); "
+                  "(c) propose the learnable-sink pre-training fix.",
+                  fill=LIGHT, border=BLUE,
+                  label_size=15, sub_size=14, sub_color=TEXT)
+    return s
+
+
+# --- Mechanism deep-dive -------------------------------------------------
+
+
+def s_mech_worked_example(prs):
+    s = _blank(prs)
+    _title(s, "Mechanism deep-dive: a 20-token worked example")
+    _plain_text(s,
+                "Cache = 4 sinks + 8-token rolling window. Decoding step 20.",
+                0.7, 1.55, 12.0, 0.4, size=15, color=TEXT)
+    # original positions row
+    _plain_text(s, "Original positions kept in cache:",
+                0.7, 2.05, 12.0, 0.35, size=13, bold=True, color=NAVY)
+    for i, orig in enumerate([0, 1, 2, 3, 12, 13, 14, 15, 16, 17, 18, 19]):
+        x = 0.7 + i * 0.9
+        fill = ACCENT if i < 4 else BLUE
+        _box(s, x, 2.5, 0.75, 0.55, fill=fill, line=fill)
+        _plain_text(s, str(orig), x, 2.6, 0.75, 0.4,
+                    size=13, bold=True, color=BG, align=PP_ALIGN.CENTER)
+    _plain_text(s, "(sinks)", 0.7, 3.15, 3.5, 0.3,
+                size=11, bold=True, color=ACCENT)
+    _plain_text(s, "(rolling window: positions 4–11 evicted)",
+                4.4, 3.15, 6.0, 0.3, size=11, bold=True, color=BLUE)
+    # remapped row
+    _plain_text(s, "Cache-local position IDs the model actually sees:",
+                0.7, 3.75, 12.0, 0.35, size=13, bold=True, color=NAVY)
+    for i, local in enumerate(list(range(12))):
+        x = 0.7 + i * 0.9
+        _box(s, x, 4.2, 0.75, 0.55, fill=LIGHT, line=NAVY, line_pt=1.0)
+        _plain_text(s, str(local), x, 4.3, 0.75, 0.4,
+                    size=13, bold=True, color=NAVY, align=PP_ALIGN.CENTER)
+    _labelled_box(s, 0.7, 5.15, 12.0, 1.75,
+                  "Why re-indexing matters",
+                  "If we passed the model original positions "
+                  "[0,1,2,3,12,13,14,15,16,17,18,19] with a query at "
+                  "position 20, RoPE would rotate keys as if positions "
+                  "4–11 existed. ALiBi would penalise the 12→13 gap. "
+                  "Cache-local re-indexing makes the sinks *adjacent* "
+                  "to the rolling window in position space, which is "
+                  "the regime the pre-trained model was optimised for. "
+                  "Paper §3.2, p. 5.",
+                  fill=LIGHT, border=BLUE,
+                  label_size=15, sub_size=13, sub_color=TEXT)
+    return s
+
+
+def s_mech_rope_alibi(prs):
+    s = _blank(prs)
+    _title(s, "Mechanism deep-dive: RoPE and ALiBi variants")
+    headers = ["Aspect", "RoPE (Llama-2, Falcon, Pythia)", "ALiBi (MPT)"]
+    rows = [
+        ["Where positions enter",
+         "Rotate q, k by θ_i in complex plane",
+         "Add -m·|i-j| bias to logits"],
+        ["Cache what?",
+         "Cache pre-rotation K",
+         "Cache K unmodified"],
+        ["Rotate/bias when?",
+         "Apply rotation at decode with cache-local index",
+         "Apply contiguous linear bias in cache coordinates"],
+        ["Effect of a gap in positions",
+         "Wrong relative rotation → PPL explodes",
+         "Bias magnitude wrong → PPL explodes"],
+        ["Fix cost",
+         "One extra Q·K^T-time rotate; free memory-wise",
+         "Recompute the bias row; free memory-wise"],
+    ]
+    _table(s, headers, rows, left_in=0.5, top_in=1.55,
+           col_widths_in=[3.3, 4.9, 4.5],
+           head_size=12, cell_size=11, row_height_in=0.7)
+    _plain_text(s,
+                "Both fixes are ~5–10 lines on top of the standard "
+                "HF forward. Paper §3.2, p. 5.",
+                0.5, 5.9, 12.5, 0.4, size=13, color=MUTED)
+    return s
+
+
+def s_mech_algorithm_box(prs):
+    s = _blank(prs)
+    _title(s, "Mechanism deep-dive: the algorithm in one box")
+    _box(s, 0.7, 1.55, 12.0, 5.2, fill=LIGHT, line=NAVY, line_pt=1.0)
+    lines = [
+        "State: sinks = KV[0..S-1]   ·   window = deque(maxlen=L)   ·   S=4, L=1020",
+        "",
+        "def decode_step(x_t):",
+        "    q, k, v  =  project(x_t)                  # (H, d)",
+        "    cache_K  =  concat(sinks.K, window.K, k)   # length ≤ S+L+1",
+        "    cache_V  =  concat(sinks.V, window.V, v)",
+        "    # cache-local position IDs = 0..len(cache_K)-1",
+        "    pos      =  arange(len(cache_K))",
+        "    if using_RoPE:",
+        "        cache_K = rotate(cache_K, pos)         # rotate at decode",
+        "        q       = rotate(q,       pos[-1])",
+        "    logits = softmax(q @ cache_K.T / sqrt(d))",
+        "    y_t    = logits @ cache_V",
+        "    window.append((k, v))                      # sinks never touched",
+        "    return y_t",
+    ]
+    for i, line in enumerate(lines):
+        _plain_text(s, line, 0.9, 1.7 + i * 0.32, 11.6, 0.35,
+                    size=13, color=NAVY if i == 0 else TEXT,
+                    bold=(i == 0))
+    _plain_text(s,
+                "Total additional code vs. vanilla HF decode ≈ 40–50 lines. "
+                "See task1-presentation/code/streaming_llm_demo.py.",
+                0.7, 6.9, 12.0, 0.35, size=12, color=MUTED)
+    return s
+
+
+# --- Sink-token pre-training deep-dive ------------------------------------
+
+
+def s_sink_pretraining_deep(prs):
+    s = _blank(prs)
+    _title(s, "Sink-Token pre-training deep-dive (§3.3)")
+    _bullets(s, [
+        "Two proposals, both trained on deduplicated Pile, 160M-param "
+        "Pythia-shaped model, batch 256, 143K steps.",
+        "Learnable Sink Token — one placeholder prepended to every "
+        "training sample; parameters learned end-to-end.",
+        "Zero Sink — replaces SoftMax with SoftMax-off-by-One (Miller, "
+        "2023): add a constant 1 to the denominator; equivalent to a "
+        "phantom all-zero key/value.",
+    ], top_in=1.55, size=17)
+    headers = ["Variant  ·  cache config (160M, PG19)",
+               "0+1024", "1+1023", "2+1022", "4+1020"]
+    rows = [
+        ["Vanilla",         "27.87", "18.49", "18.05", "18.05"],
+        ["Zero Sink",       "29214", "19.90", "18.27", "18.01"],
+        ["Learnable Sink",  "1235",  "18.01", "18.01", "18.02"],
+    ]
+    _table(s, headers, rows, left_in=1.1, top_in=4.35,
+           col_widths_in=[4.7, 1.4, 1.4, 1.4, 1.4],
+           head_size=12, cell_size=12, row_height_in=0.42)
+    _plain_text(s,
+                "Table 3, p. 6.  Read the 1+1023 column: Learnable Sink "
+                "18.01 already matches Vanilla's 4+1020 (18.05).",
+                1.1, 6.35, 11.0, 0.4, size=12, color=MUTED)
+    return s
+
+
+def s_sink_downstream(prs):
+    s = _blank(prs)
+    _title(s, "Sink-Token pre-training: does downstream accuracy hold?")
+    _bullets(s, [
+        "Table 4 (p. 7): zero-shot accuracy on seven benchmarks, "
+        "160M vanilla vs 160M with Sink Token pre-training.",
+        "Differences on all seven tasks are <1 point.",
+        "Sink-Token column is *slightly higher* on average.",
+        "Figure 6 (p. 7): pre-training loss curves are indistinguishable.",
+        "Figure 7 (p. 7): attention heatmaps confirm the sink token "
+        "draws the mass that would otherwise smear over positions 1–4.",
+    ], top_in=1.55, size=17)
+    _labelled_box(s, 0.7, 4.7, 12.0, 2.15,
+                  "The honest caveat (paper §3.3 + our critical read)",
+                  "Everything above is at 160M parameters. "
+                  "The stronger claim — that a single learnable sink "
+                  "token replaces the four accidental ones at 7B / 13B / "
+                  "70B — is left as future work. Nobody has published "
+                  "the scale-up. The bigger the model, the more the "
+                  "accidental sinks smear; whether a single learned "
+                  "slot still absorbs all of them at scale is an open "
+                  "empirical question.",
+                  fill=LIGHT, border=HIGHLIGHT,
+                  label_size=15, sub_size=13, sub_color=TEXT,
+                  label_color=HIGHLIGHT)
+    return s
+
+
+# --- Results deep-dive ---------------------------------------------------
+
+
+def s_result_ppl_permodel(prs):
+    s = _blank(prs)
+    _title(s, "Results deep-dive: Fig. 5 per-model perplexity to 4M tokens")
+    _bullets(s, [
+        "Same StreamingLLM policy applied to every family; cache = half "
+        "the pre-training window.",
+        "Perplexity stable out past 4M tokens on 10 different models.",
+    ], top_in=1.55, size=17)
+    headers = ["Family",  "Sizes tested", "Pos. encoding",
+               "Cache used", "PPL @ 4M tokens (stable?)"]
+    rows = [
+        ["Llama-2",  "7B, 13B, 70B",   "RoPE",  "2048", "flat"],
+        ["MPT",      "7B, 30B",        "ALiBi", "1024", "flat"],
+        ["Falcon",   "7B, 40B",        "RoPE",  "1024", "flat"],
+        ["Pythia",   "2.8B, 6.9B, 12B","RoPE",  "1024", "flat"],
+    ]
+    _table(s, headers, rows, left_in=0.7, top_in=3.1,
+           col_widths_in=[2.0, 2.6, 2.6, 1.9, 3.0],
+           head_size=12, cell_size=12, row_height_in=0.45)
+    _labelled_box(s, 0.7, 5.55, 12.0, 1.35,
+                  "The Sliding+Recompute reference line",
+                  "The paper overlays the oracle sliding-window-with-"
+                  "recomputation baseline. StreamingLLM tracks it "
+                  "essentially exactly on all 10 models — but at "
+                  "up to 22× lower per-token latency (next slide).",
+                  fill=LIGHT, border=GREEN_OK,
+                  label_size=14, sub_size=13, sub_color=TEXT,
+                  label_color=GREEN_OK)
+    return s
+
+
+def s_result_throughput_full(prs):
+    s = _blank(prs)
+    _title(s, "Results deep-dive: Fig. 10 per-cache-size latency (7B + 13B)")
+    _plain_text(s, "Llama-2-13B (per-token decode latency, ms):",
+                0.5, 1.55, 6.5, 0.4, size=13, bold=True, color=NAVY)
+    _table(s,
+           ["Cache", "Sliding+Recompute", "StreamingLLM", "Speed-up"],
+           [
+               ["256",  "2355", "106", "22.2×"],
+               ["512",  "860",  "75",  "11.5×"],
+               ["1024", "361",  "60",  "6.0×"],
+               ["2048", "169",  "52",  "3.3×"],
+               ["4096", "99",   "48",  "2.1×"],
+           ],
+           left_in=0.5, top_in=1.95,
+           col_widths_in=[0.9, 2.4, 1.9, 1.1],
+           head_size=11, cell_size=11, row_height_in=0.32)
+    _plain_text(s, "Llama-2-7B (per-token decode latency, ms):",
+                7.0, 1.55, 6.0, 0.4, size=13, bold=True, color=NAVY)
+    _table(s,
+           ["Cache", "Sliding+Recompute", "StreamingLLM", "Speed-up"],
+           [
+               ["256",  "1411", "65", "21.7×"],
+               ["512",  "523",  "45", "11.6×"],
+               ["1024", "223",  "35", "6.4×"],
+               ["2048", "103",  "31", "3.3×"],
+               ["4096", "63",   "31", "2.0×"],
+           ],
+           left_in=7.0, top_in=1.95,
+           col_widths_in=[0.9, 2.4, 1.9, 1.1],
+           head_size=11, cell_size=11, row_height_in=0.32)
+    _labelled_box(s, 0.5, 4.15, 12.5, 2.75,
+                  "Reading the numbers honestly",
+                  "The 22.2× headline is the *small-cache* number. That "
+                  "is where the Sliding+Recompute baseline hurts most "
+                  "(each new token forces a rebuild of the whole "
+                  "cache). At cache 4096 the speed-up shrinks to 2× "
+                  "because the recompute baseline amortises over a "
+                  "larger cache. The important second row is memory: "
+                  "StreamingLLM and Sliding+Recompute have essentially "
+                  "identical footprint (both bounded by cache size). "
+                  "Single A6000, HF Transformers, batch 1, greedy "
+                  "decode. Batched-attention interactions are out of "
+                  "scope — a fair question for Q&A.",
+                  fill=LIGHT, border=BLUE,
+                  label_size=15, sub_size=13, sub_color=TEXT)
+    return s
+
+
+def s_result_streaming_qa_perM(prs):
+    s = _blank(prs)
+    _title(s, "Results deep-dive: streaming QA per model size")
+    _plain_text(s,
+                "Concatenate every ARC-Easy and ARC-Challenge question "
+                "into a single stream. Score exact match on each answer. "
+                "Cache = 1024.",
+                0.5, 1.55, 12.5, 0.4, size=13, color=TEXT)
+    _plain_text(s,
+                "Look at the Window row: this is not a slight "
+                "degradation, it's collapse. StreamingLLM restores "
+                "one-shot-parity accuracy — or slightly beats it.",
+                0.5, 1.95, 12.5, 0.4, size=13, color=MUTED)
+    headers = ["Model  ·  policy", "ARC-E", "ARC-C", "Δ vs one-shot"]
+    rows = [
+        ["Llama-2-7B-Chat  one-shot",    "71.25", "53.16", "—"],
+        ["Llama-2-7B-Chat  Window",      "3.58",  "1.39",  "-67.7 / -51.8"],
+        ["Llama-2-7B-Chat  StreamingLLM","71.34", "55.03", "+0.1 / +1.9"],
+        ["Llama-2-13B-Chat one-shot",    "78.16", "63.31", "—"],
+        ["Llama-2-13B-Chat Window",      "0.25",  "0.34",  "-77.9 / -63.0"],
+        ["Llama-2-13B-Chat StreamingLLM","80.89", "65.61", "+2.7 / +2.3"],
+        ["Llama-2-70B-Chat one-shot",    "91.29", "78.50", "—"],
+        ["Llama-2-70B-Chat Window",      "0.12",  "0.32",  "-91.2 / -78.2"],
+        ["Llama-2-70B-Chat StreamingLLM","91.37", "80.20", "+0.1 / +1.7"],
+    ]
+    _table(s, headers, rows, left_in=1.5, top_in=2.85,
+           col_widths_in=[5.6, 1.5, 1.5, 2.4],
+           head_size=12, cell_size=11, row_height_in=0.35)
+    _plain_text(s, "Dense OOMs before the stream ends. Table 5, p. 8.",
+                1.5, 6.2, 11.0, 0.35, size=12, color=MUTED)
+    return s
+
+
+def s_result_streameval(prs):
+    s = _blank(prs)
+    _title(s, "Results deep-dive: StreamEval (Fig. 8 + Fig. 9)")
+    _bullets(s, [
+        "The paper's own long-eval benchmark: issue a query every 10 "
+        "lines; the answer is always exactly 20 lines back.",
+        "Tests whether the *rolling window* is doing its job on a "
+        "controlled distance signal.",
+        "Setup: Llama-2-7B-Chat + StreamingLLM at cache 1024, "
+        "vs. dense (OOMs), vs. LongChat-7B-v1.5-32K + StreamingLLM.",
+    ], top_in=1.55, size=17)
+    _labelled_box(s, 0.7, 3.85, 12.0, 1.6,
+                  "Positive result (Fig. 8)",
+                  "StreamingLLM stays accurate up to ~120K tokens; "
+                  "dense collapses (OOM); window is near-zero from the "
+                  "first cache eviction. StreamingLLM does what "
+                  "Sliding+Recompute would, at fraction of the cost.",
+                  fill=LIGHT, border=GREEN_OK,
+                  label_size=15, sub_size=13, sub_color=TEXT,
+                  label_color=GREEN_OK)
+    _labelled_box(s, 0.7, 5.55, 12.0, 1.35,
+                  "Honest limit (Fig. 9)",
+                  "Accuracy drops the *moment* query-answer distance "
+                  "exceeds cache size. StreamingLLM has NO ability to "
+                  "recall information older than the rolling window. "
+                  "This is the whole basis of §5's honest scope claim.",
+                  fill=LIGHT, border=HIGHLIGHT,
+                  label_size=15, sub_size=13, sub_color=TEXT,
+                  label_color=HIGHLIGHT)
+    return s
+
+
+# --- Limitations deep-dive ----------------------------------------------
+
+
+def s_limits_nonmonotone(prs):
+    s = _blank(prs)
+    _title(s, "Limits deep-dive: bigger cache ≠ lower perplexity")
+    _plain_text(s,
+                "Table 6 (p. 9). PG19, Llama-2-7B and Llama-2-13B. "
+                "Sink count fixed at 4.",
+                0.5, 1.55, 12.5, 0.4, size=13, color=TEXT)
+    headers = ["Rolling window L", "Llama-2-7B PPL", "Llama-2-13B PPL"]
+    rows = [
+        ["508  (S+L = 512)",  "9.73", "8.35"],
+        ["1020 (S+L = 1024)", "9.32", "7.79"],
+        ["2044 (S+L = 2048)", "9.08", "7.51"],
+        ["4092 (S+L = 4096)", "9.59", "7.60"],
+    ]
+    _table(s, headers, rows, left_in=2.0, top_in=2.15,
+           col_widths_in=[3.6, 2.5, 2.5], head_size=12, cell_size=12,
+           row_height_in=0.42)
+    _labelled_box(s, 0.5, 4.35, 12.5, 2.55,
+                  "Two ways to read this",
+                  "Paper reads it as an LLM limitation: current LLMs "
+                  "under-utilise the context they're given.\n\n"
+                  "Our critical reading (see critical-analysis.md): "
+                  "this is also a hint that the *policy* is leaving "
+                  "signal on the table. A smarter rule inside the "
+                  "rolling window — e.g. H2O-style attention-score "
+                  "eviction — might monotonically improve with L. "
+                  "This is exactly the direction the modern "
+                  "alternatives explore.",
+                  fill=LIGHT, border=BLUE,
+                  label_size=15, sub_size=13, sub_color=TEXT)
+    return s
+
+
+def s_limits_longbench(prs):
+    s = _blank(prs)
+    _title(s, "Limits deep-dive: LongBench (Table 8) is not the target")
+    _plain_text(s,
+                "StreamingLLM 4+3496 vs default truncation 1750+1750, "
+                "LongChat-7B-v1.5-32K.",
+                0.5, 1.55, 12.5, 0.4, size=13, color=TEXT)
+    headers = ["Task",
+               "StreamingLLM 4+3496",
+               "Truncation 1750+1750",
+               "StreamingLLM 1750+1750"]
+    rows = [
+        ["NarrativeQA", "11.6", "18.7", "18.5"],
+        ["Qasper",      "16.9", "19.2", "19.6"],
+        ["HotpotQA",    "21.6", "25.4", "27.4"],
+        ["2WikiMQA",    "28.2", "32.8", "31.7"],
+        ["GovReport",   "23.9", "27.3", "28.4"],
+        ["MultiNews",   "25.5", "25.8", "25.6"],
+    ]
+    _table(s, headers, rows, left_in=0.7, top_in=2.05,
+           col_widths_in=[2.4, 3.3, 3.3, 3.3],
+           head_size=12, cell_size=11, row_height_in=0.38)
+    _labelled_box(s, 0.7, 4.6, 12.0, 2.3,
+                  "Why StreamingLLM loses here",
+                  "LongBench evaluates long-doc QA. StreamingLLM at "
+                  "4+3496 keeps only 4 sink tokens of the *initial "
+                  "prompt* — and the prompt is where LongBench puts "
+                  "the question. Raise the sink budget to 1750 and "
+                  "parity is restored. Verdict: StreamingLLM is a "
+                  "*streaming* policy, not a *long-doc* policy. The "
+                  "paper is explicit about this in Appendix A.",
+                  fill=LIGHT, border=HIGHLIGHT,
+                  label_size=15, sub_size=13, sub_color=TEXT,
+                  label_color=HIGHLIGHT)
+    return s
+
+
+def s_limits_position_only(prs):
+    s = _blank(prs)
+    _title(s, "Limits deep-dive: positional-only, no content awareness")
+    _bullets(s, [
+        "Eviction rule: keep first S tokens + last L tokens. "
+        "Nothing else influences the decision.",
+        "The paper never compares to attention-score-based evictors "
+        "(H2O, SnapKV, Scissorhands, FastGen). Chronologically "
+        "understandable (StreamingLLM arXiv Sept 2023) but a modern "
+        "audience will ask.",
+        "Consequence: a token in the rolling window that was heavily "
+        "attended to is evicted the moment it ages out — even if "
+        "later queries would attend to it again.",
+        "Complementary hypothesis (my analysis): sinks + "
+        "content-aware inside the window is likely to beat either "
+        "alone. Section 'What I would change' comes back to this.",
+    ], top_in=1.55, size=17)
+    _labelled_box(s, 0.7, 5.55, 12.0, 1.35,
+                  "Bridge to the next section",
+                  "Let's meet the content-aware evictors StreamingLLM "
+                  "did not compete against, and see where each of "
+                  "them wins.",
+                  fill=LIGHT, border=ACCENT,
+                  label_size=15, sub_size=14, sub_color=TEXT,
+                  label_color=ACCENT)
+    return s
+
+
+# --- Modern alternatives (H2O / SnapKV / etc.) --------------------------
+
+
+def s_alt_content_aware(prs):
+    s = _blank(prs)
+    _title(s, "Modern alternatives: content-aware KV-cache eviction")
+    headers = ["Method  ·  year", "Signal used to evict",
+               "Complexity", "Position of the sink question"]
+    rows = [
+        ["H2O (2023)",
+         "Cumulative attention score",
+         "O(TL log L)",
+         "Not addressed; treats first tokens as ordinary"],
+        ["Scissorhands (2023)",
+         "Persistence of attention across steps",
+         "O(TL)",
+         "Not addressed"],
+        ["FastGen (2023)",
+         "Per-head profile (heavy hitters, local, punct.)",
+         "O(TL)",
+         "Detects sinks empirically, per-head"],
+        ["SnapKV (2024)",
+         "Attention voting from a short observation window",
+         "O(TL)",
+         "Not addressed"],
+        ["Keyformer (2024)",
+         "Approx. attention via Gumbel-softmax over keys",
+         "O(TL log L)",
+         "Not addressed"],
+    ]
+    _table(s, headers, rows, left_in=0.4, top_in=1.55,
+           col_widths_in=[2.4, 3.9, 1.9, 4.5],
+           head_size=11, cell_size=10, row_height_in=0.5)
+    _plain_text(s,
+                "All five are compatible with StreamingLLM in principle: "
+                "keep 4 positional sinks; evict inside the rolling "
+                "window by content. No paper we know of publishes the "
+                "hybrid at scale.",
+                0.4, 5.3, 12.6, 0.9, size=13, color=MUTED)
+    return s
+
+
+def s_alt_positional_vs_content(prs):
+    s = _blank(prs)
+    _title(s, "Positional vs. content-aware: strengths & failure modes")
+    headers = ["Property",
+               "StreamingLLM (positional)",
+               "H2O / SnapKV (content-aware)"]
+    rows = [
+        ["Decision rule",
+         "keep first S + last L",
+         "keep top-scoring tokens by attention weight"],
+        ["Implementation cost",
+         "~50 lines, no forward-pass changes",
+         "profiling of attention scores + priority queue"],
+        ["Softmax denominator stability",
+         "guaranteed (sinks stay)",
+         "not guaranteed (may drop the sink)"],
+        ["Long-range content retention",
+         "none beyond L",
+         "yes for heavy-hitters"],
+        ["Bursty / topic-shifting traffic",
+         "robust (positional)",
+         "risk: heavy hitters go stale"],
+        ["Bench where it wins",
+         "streaming LM / dialogue",
+         "long-doc QA / summarisation"],
+    ]
+    _table(s, headers, rows, left_in=0.4, top_in=1.55,
+           col_widths_in=[3.3, 4.3, 5.1],
+           head_size=12, cell_size=11, row_height_in=0.52)
+    _plain_text(s,
+                "\"What I would change\" (slide coming) argues the two "
+                "should be combined: positional sinks + content-aware "
+                "rolling window.",
+                0.4, 5.9, 12.6, 0.5, size=12, color=MUTED)
+    return s
+
+
+# --- Live implementation walkthrough ------------------------------------
+
+
+def s_impl_pytorch(prs):
+    s = _blank(prs)
+    _title(s, "Implementation walkthrough 1/3: ~50 lines of PyTorch")
+    _box(s, 0.5, 1.55, 12.5, 5.35, fill=LIGHT, line=NAVY, line_pt=1.0)
+    code = [
+        "class SinkKVCache:",
+        "    def __init__(self, n_sinks=4, window=1020):",
+        "        self.S, self.L = n_sinks, window",
+        "        self.sinks_k, self.sinks_v = None, None",
+        "        self.win_k,   self.win_v   = [], []",
+        "",
+        "    def append(self, k, v):                       # k, v: (H, 1, d)",
+        "        if self.sinks_k is None or self.sinks_k.size(1) < self.S:",
+        "            self.sinks_k = _cat(self.sinks_k, k)",
+        "            self.sinks_v = _cat(self.sinks_v, v)",
+        "            return",
+        "        self.win_k.append(k); self.win_v.append(v)",
+        "        if len(self.win_k) > self.L:",
+        "            self.win_k.pop(0);  self.win_v.pop(0)",
+        "",
+        "    def as_kv(self):",
+        "        K = torch.cat([self.sinks_k, *self.win_k], dim=1)",
+        "        V = torch.cat([self.sinks_v, *self.win_v], dim=1)",
+        "        return K, V                              # cache-local layout",
+    ]
+    for i, line in enumerate(code):
+        _plain_text(s, line, 0.7, 1.7 + i * 0.28, 12.0, 0.28,
+                    size=12, color=TEXT if not line.startswith("class ") else NAVY,
+                    bold=line.startswith("class "))
+    return s
+
+
+def s_impl_rope(prs):
+    s = _blank(prs)
+    _title(s, "Implementation walkthrough 2/3: cache-local RoPE")
+    _box(s, 0.5, 1.55, 12.5, 5.35, fill=LIGHT, line=NAVY, line_pt=1.0)
+    code = [
+        "def attention_step(x_t, cache, W_q, W_k, W_v, W_o, rope):",
+        "    q  = W_q @ x_t                       # (H, 1, d)",
+        "    k  = W_k @ x_t                       # store pre-rotation",
+        "    v  = W_v @ x_t",
+        "    cache.append(k, v)                   # sinks-then-window",
+        "    K_pre, V = cache.as_kv()             # length T_c = S + L",
+        "",
+        "    pos_ids = torch.arange(K_pre.size(1), device=x_t.device)",
+        "    K = rope.rotate(K_pre, pos_ids)      # cache-local IDs !",
+        "    q = rope.rotate(q,     pos_ids[-1:]) # query at position T_c-1",
+        "",
+        "    scores = (q @ K.transpose(-1, -2)) / d_head ** 0.5",
+        "    y = torch.softmax(scores, dim=-1) @ V",
+        "    return W_o @ y",
+    ]
+    for i, line in enumerate(code):
+        _plain_text(s, line, 0.7, 1.7 + i * 0.32, 12.0, 0.32,
+                    size=12, color=TEXT if not line.startswith("def ") else NAVY,
+                    bold=line.startswith("def "))
+    _plain_text(s,
+                "Note: the KV cache stores keys *pre*-rotation. Rotation "
+                "is applied every step with a fresh position vector "
+                "arange(0, T_c). This is what makes the sinks and the "
+                "rolling window appear adjacent to the model.",
+                0.5, 6.35, 12.5, 0.55, size=11, color=MUTED)
+    return s
+
+
+def s_impl_bench_harness(prs):
+    s = _blank(prs)
+    _title(s, "Implementation walkthrough 3/3: benchmark harness sketch")
+    _box(s, 0.5, 1.55, 12.5, 5.35, fill=LIGHT, line=NAVY, line_pt=1.0)
+    code = [
+        "# Reproducing Fig. 5 for one model:",
+        "model = AutoModelForCausalLM.from_pretrained('meta-llama/Llama-2-7b-hf')",
+        "cache = SinkKVCache(n_sinks=4, window=2044)      # 4+2044 config",
+        "",
+        "tokens = load_pg19_concat(target_len=4_000_000)  # PG19 test",
+        "logits = []",
+        "for t in tqdm(range(len(tokens))):",
+        "    logit = decode_step(model, tokens[t], cache)",
+        "    logits.append(logit)",
+        "",
+        "ppl = perplexity_from_logits(logits, tokens[1:])",
+        "assert ppl_at_4M(ppl) < 10.0                     # Table 6, Llama-2-7B",
+        "",
+        "# For 22.2×: repeat with sliding-window+recompute baseline and",
+        "# divide per-token wall-clock. Fig. 10 numbers reproduce to ~5%.",
+    ]
+    for i, line in enumerate(code):
+        _plain_text(s, line, 0.7, 1.7 + i * 0.32, 12.0, 0.32,
+                    size=12, color=TEXT,
+                    bold=False)
+    _plain_text(s,
+                "Full runnable version: task1-presentation/code/"
+                "streaming_llm_demo.py",
+                0.5, 6.35, 12.5, 0.4, size=12, color=MUTED)
+    return s
+
+
+# --- Bridge + Q&A prep ---------------------------------------------------
+
+
+def s_bridge_task2(prs):
+    s = _blank(prs)
+    _title(s, "Bridge to Task 2: two caches, one idea")
+    headers = ["Layer",
+               "StreamingLLM (Task 1)",
+               "GDSF on GPTCache (Task 2)"]
+    rows = [
+        ["What is cached",
+         "Key/Value vectors of past tokens",
+         "Whole (prompt → response) pairs"],
+        ["Where in the stack",
+         "Inside the model, per attention layer",
+         "In front of the model, at the API layer"],
+        ["Capacity units",
+         "S sinks + L rolling tokens",
+         "N entries or M bytes"],
+        ["Eviction signal",
+         "Position (first S + last L)",
+         "Frequency, dollar cost, size (GDSF)"],
+        ["Failure mode when dumb",
+         "PPL 5158 (softmax collapse)",
+         "Overspend on regeneration $$$"],
+        ["What our project proves",
+         "Reproduce +25%..+91% below",
+         "GDSF beats LRU by up to +91% $ savings"],
+    ]
+    _table(s, headers, rows, left_in=0.4, top_in=1.55,
+           col_widths_in=[2.7, 4.5, 5.5],
+           head_size=12, cell_size=11, row_height_in=0.55)
+    _labelled_box(s, 0.4, 4.9, 12.6, 2.0,
+                  "The through-line",
+                  "Both caches are bounded. Both suffer when eviction "
+                  "is naive. StreamingLLM fixes it with a positional "
+                  "rule. My Task-2 project fixes it with a cost-aware "
+                  "rule. Same underlying diagnosis: dumb eviction wastes "
+                  "bounded capacity.",
+                  fill=LIGHT, border=ACCENT,
+                  label_size=15, sub_size=14, sub_color=TEXT,
+                  label_color=ACCENT)
+    return s
+
+
+def s_qa_prep_1(prs):
+    s = _blank(prs)
+    _title(s, "Q&A prep 1/2: expected questions")
+    _bullets(s, [
+        "\"Is this just window attention with a warm start?\" — No. "
+        "Sinks are never evicted (Table 1, PPL 5158 → 5.40).",
+        "\"Why 4 sinks?\" — Table 2: 1–2 leaves a residual bump; 4 "
+        "saturates; 8 no further gain.",
+        "\"RoPE, ALiBi, or both?\" — Both, via cache-local re-indexing "
+        "(§3.2, p. 5).",
+        "\"Does it extend the context?\" — No. Table 7, Fig. 9: "
+        "accuracy collapses past cache size.",
+        "\"vs. H2O / SnapKV / FastGen?\" — Paper does not compare; "
+        "chronologically earlier. Positional vs. content-aware are "
+        "complementary.",
+        "\"Long-doc QA?\" — Table 8: underperforms truncation at "
+        "4+3496 because prompt is lost; parity at 1750+1750.",
+    ], top_in=1.55, size=17)
+    return s
+
+
+def s_qa_prep_2(prs):
+    s = _blank(prs)
+    _title(s, "Q&A prep 2/2: harder questions and what I would say")
+    _bullets(s, [
+        "\"Are sinks a softmax artefact — would SoftMax-off-by-One "
+        "kill them?\" — Table 3 Zero-Sink row: helps somewhat "
+        "(29214→18.01) but does not remove the need for sinks. "
+        "Empirical rescue > theoretical fix.",
+        "\"Is 22.2× realistic for production?\" — Batch-1, single-A6000 "
+        "number. Real servers batch. Batched-attention interactions "
+        "with sink+rolling layout are an open engineering question.",
+        "\"What breaks the sink phenomenon?\" — Not shown; the paper "
+        "covers Llama-2, MPT, Falcon, Pythia, BERT, ViT. Would love "
+        "to see it tested on Mixture-of-Experts and on state-space "
+        "models (Mamba).",
+        "\"Have you reproduced this?\" — Not the LLM-scale numbers "
+        "directly (compute), but the 50-line demo + our GDSF work "
+        "reproduces the underlying \"dumb eviction is expensive\" "
+        "claim at the response-cache layer with 3600-run stats.",
+    ], top_in=1.55, size=16)
+    return s
 
 
 def s_conclusion(prs):
@@ -766,33 +1542,70 @@ def build():
     builders = [
         s_title,
         s_agenda,
+        # Basics section
         s_section_basics,
         s_llm_decoding,
         s_course_anchor,
         s_naive_options,
+        # Related work section
+        s_section_related,
+        s_related_length_extrap,
+        s_related_context_ext,
+        s_related_sparse_and_lminf,
+        # The observation
         s_section_observation,
         s_attention_sink_phenomenon,
         s_softmax_argument,
         s_semantics_or_position,
+        # The mechanism + deep-dive
         s_section_mechanism,
         s_cache_layout,
         s_position_reindex,
+        s_mech_worked_example,
+        s_mech_rope_alibi,
+        s_mech_algorithm_box,
+        # Sink-Token pre-training (§3.3) + deep-dive
         s_sink_token_pretraining,
+        s_sink_pretraining_deep,
+        s_sink_downstream,
+        # Results + deep-dive
         s_section_results,
         s_perplexity_result,
+        s_result_ppl_permodel,
         s_throughput_result,
+        s_result_throughput_full,
         s_streaming_qa,
+        s_result_streaming_qa_perM,
+        s_result_streameval,
+        # Limits + deep-dive
         s_limits,
+        s_limits_nonmonotone,
+        s_limits_longbench,
+        s_limits_position_only,
+        # Modern alternatives
+        s_alt_content_aware,
+        s_alt_positional_vs_content,
+        # Implementation walkthrough
+        s_impl_pytorch,
+        s_impl_rope,
+        s_impl_bench_harness,
+        # What I'd change + bridge + Q&A + conclusion
         s_what_id_change,
+        s_bridge_task2,
+        s_qa_prep_1,
+        s_qa_prep_2,
         s_conclusion,
         s_thanks,
     ]
 
+    section_dividers = (s_title, s_section_basics, s_section_related,
+                        s_section_observation, s_section_mechanism,
+                        s_section_results, s_thanks)
+
     for i, b in enumerate(builders, start=1):
         slide = b(prs)
-        # Page numbers on all but the two full-navy dividers/title/thanks
-        if b not in (s_title, s_section_basics, s_section_observation,
-                     s_section_mechanism, s_section_results, s_thanks):
+        # Page numbers on all but the full-navy dividers/title/thanks
+        if b not in section_dividers:
             tb = slide.shapes.add_textbox(Inches(12.7), Inches(7.05),
                                           Inches(0.6), Inches(0.3))
             tf = tb.text_frame

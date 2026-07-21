@@ -1,0 +1,815 @@
+%% ============================================================================
+%%  Cost-Aware Eviction for LLM Response Caching:
+%%  A GDSF-Based Approach for GPTCache
+%%
+%%  Author : Nissim Brami  <nissimbrami@post.bgu.ac.il>
+%%  Course : Caching in LLMs -- Ben-Gurion University of the Negev
+%%  Repo   : https://github.com/nissimbrami/caching-course-project
+%%
+%%  Build:
+%%      latexmk -pdf report.tex
+%%  or  compile on Overleaf with pdfLaTeX (main = report.tex, bib = references.bib).
+%% ============================================================================
+\documentclass[sigconf, nonacm, review=false, screen=true]{acmart}
+
+%% -- Metadata & packages -----------------------------------------------------
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{siunitx}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=blue!60!black, citecolor=blue!60!black, urlcolor=blue!60!black}
+
+\graphicspath{{figures/}}
+
+%% -- Suppress conference footer (course project, not a real venue) -----------
+\settopmatter{printacmref=false, printccs=false, printfolios=true}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\pagestyle{plain}
+
+%% -- Code listing style ------------------------------------------------------
+\definecolor{codegray}{gray}{0.95}
+\lstdefinestyle{pystyle}{
+    backgroundcolor=\color{codegray},
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{blue!60!black}\bfseries,
+    commentstyle=\color{gray!70!black}\itshape,
+    stringstyle=\color{orange!70!black},
+    numbers=left, numberstyle=\tiny\color{gray}, numbersep=6pt,
+    frame=single, framesep=4pt, rulecolor=\color{gray!30},
+    breaklines=true, showstringspaces=false, tabsize=4,
+    language=Python,
+}
+\lstset{style=pystyle}
+
+%% -- Title & author ----------------------------------------------------------
+\title{Cost-Aware Eviction for LLM Response Caching: \\
+       A GDSF-Based Approach for GPTCache}
+
+\author{Nissim Brami}
+\affiliation{%
+  \institution{Ben-Gurion University of the Negev}
+  \department{Department of Computer Science}
+  \city{Beer-Sheva}
+  \country{Israel}
+}
+\email{nissimbrami@post.bgu.ac.il}
+
+%% -- CCS / keywords ----------------------------------------------------------
+\keywords{semantic caching, LLM inference, eviction policy,
+          Greedy-Dual-Size-Frequency, GPTCache, cost-aware caching}
+
+\begin{document}
+
+\begin{abstract}
+LLM API calls are among the most expensive operations in modern AI stacks:
+per-query costs of a few cents accumulate quickly at scale. Semantic caching
+systems such as GPTCache reduce those costs by reusing prior responses, but
+their default eviction policies (LRU and FIFO) treat every cached entry as
+equally valuable~---~which they are not. A cached response for an expensive
+GPT-4 completion is worth far more than a cached response for a short
+GPT-3.5 answer. We implement a cost-aware eviction policy based on the
+Greedy-Dual-Size-Frequency (GDSF) algorithm~\cite{cherkasova1998gdsf,
+cao1997costaware} from the classical web-proxy caching literature, and
+evaluate it as a plugin for GPTCache~\cite{gptcache}. Each entry receives
+priority $\text{Priority}(i) = L + \tfrac{\text{freq}(i)^\alpha \cdot
+\text{cost}(i)^\beta}{\text{size}(i)}$, where the clock $L$ advances to the
+priority of the last evicted item, providing implicit aging. Across six
+synthetic workloads and four cache sizes ($30$ runs each, $3{,}600$
+experiments), GDSF delivers \textbf{$+25.7\%$ dollar savings on
+high-variance-cost traffic, $+32.3\%$ on bursty traffic, $+91.0\%$ on
+size-varying traffic, and $+18.8\%$ on the anti-LRU adversarial pattern},
+while matching LRU on uniform-cost and Zipf-fits-in-cache workloads. All
+differences on the four winning workloads are significant with
+Bonferroni-corrected $p < 10^{-7}$ and $95\%$ BCa bootstrap CIs excluding
+zero. The code, benchmark harness, ablation study, and $259$-test suite are
+open-source under the MIT license.
+\end{abstract}
+
+\maketitle
+
+%% ============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+We chose this project because the ``value'' of a cache entry in an LLM
+system is directly observable in the invoice from OpenAI, Anthropic, or
+whichever inference provider is used. Unlike traditional caches~---~where a
+hit saves a few milliseconds of CPU~---~an LLM cache hit saves real money,
+and the amount saved varies by an order of magnitude between short cheap
+prompts and long expensive completions. That makes cost-aware eviction not
+a theoretical curiosity but the most economically important lever
+available to a cache designer in this domain.
+
+GPTCache~\cite{gptcache} currently ships only LRU and FIFO. Both are
+recency-only policies that ignore per-entry cost, frequency, and size.
+Consider a cache at capacity that must evict one of two entries: (A)~a
+short response that cost \$0.01 to regenerate and is rarely accessed, or
+(B)~a long completion that cost \$0.10 to regenerate and is frequently
+requested. LRU picks the older one; LFU picks the less-accessed one;
+neither is aware that evicting~B is ten times more expensive to recover
+than evicting~A. GDSF folds all three
+dimensions~---~frequency, cost, size~---~into a single priority score with
+a clean theoretical grounding~\cite{cherkasova1998gdsf, cao1997costaware}.
+
+\paragraph{Contributions.}
+\begin{enumerate}[leftmargin=1.4em]
+  \item A \textbf{GDSF-based eviction policy} adapted for LLM response
+        caching, using token-count $\times$ per-model pricing to estimate
+        per-entry cost.
+  \item An \textbf{implementation as a drop-in \texttt{EvictionBase}
+        plugin for GPTCache}, with $O(\log n)$ per-operation complexity
+        via an indexed min-heap and full thread safety.
+  \item A \textbf{comprehensive benchmark harness}~---~$6$ workloads
+        $\times$ $5$ policies $\times$ $4$ cache sizes $\times$ $30$ runs
+        ($\sim3{,}600$ experiments)~---~with statistical rigor
+        (paired $t$-tests, Bonferroni correction, BCa bootstrap
+        $95\%$~CIs).
+  \item An $\alpha \times \beta$ \textbf{ablation study} confirming the
+        policy is robust to parameter choice within a wide operating range.
+  \item A \textbf{$259$-test suite} including $6$ Hypothesis-based property
+        tests that surfaced a real edge case in capacity handling under
+        duplicate keys.
+\end{enumerate}
+
+The remainder of this paper: Section~\ref{sec:related} covers related work,
+Section~\ref{sec:design} the system design,
+Section~\ref{sec:setup} the experimental setup, Section~\ref{sec:results}
+the results, Section~\ref{sec:discuss} the discussion, and
+Section~\ref{sec:conclude} conclusions and future work.
+
+%% ============================================================================
+\section{Background and Related Work}
+\label{sec:related}
+
+\subsection{LLM Caching Systems}
+The high cost and latency of LLM inference has motivated several caching
+approaches at different levels of the serving stack.
+
+\textbf{GPTCache}~\cite{gptcache} is an open-source semantic caching
+library that intercepts LLM API calls, embeds the query using a
+lightweight encoder (e.g., ONNX-based sentence transformers), searches a
+vector store for semantically similar prior queries, and returns cached
+responses when similarity exceeds a configurable threshold. GPTCache
+provides a modular architecture with pluggable components for embedding,
+similarity evaluation, storage, and eviction. Its default eviction
+policies are LRU and FIFO, implemented via simple data structures with
+$O(1)$ eviction cost.
+
+\textbf{LMCache/CacheGen}~\cite{cachegen} operates at the KV-cache level
+within transformer inference, storing intermediate attention states to
+avoid redundant prefix computation. While effective for reducing
+time-to-first-token in shared-prefix scenarios, it does not address
+response-level caching for semantically equivalent but lexically different
+queries.
+
+\textbf{vLLM}~\cite{vllm} implements PagedAttention for efficient KV-cache
+memory management during inference, treating attention key-value pairs
+analogously to virtual memory pages. Its eviction strategy optimises for
+GPU memory utilisation rather than the economic cost of regeneration.
+
+These systems collectively demonstrate that caching is essential for
+efficient LLM serving, but none incorporate the economic cost of
+regeneration into their eviction decisions.
+
+\subsection{Classical Eviction Policies}
+Cache eviction has been studied extensively in operating systems, web
+proxy caching, and content delivery networks.
+
+\textbf{LRU (Least Recently Used)} evicts the entry whose last access is
+furthest in the past. It performs well under temporal locality but is
+oblivious to item size, cost, or frequency beyond the most recent access.
+
+\textbf{LFU (Least Frequently Used)} evicts the entry with the fewest
+accesses. It captures long-term popularity but suffers from cache
+pollution~---~items that were once popular but are no longer relevant
+accumulate high counts and resist eviction.
+
+\textbf{GDSF (Greedy-Dual-Size-Frequency)}~\cite{cherkasova1998gdsf,
+arlitt2000eval} generalises the Greedy-Dual algorithm by incorporating
+frequency, cost, and size into a unified priority score. Upon eviction,
+the item with the minimum priority is removed, and a global clock value
+is inflated to the evicted item's priority. New or re-accessed items
+receive priority $L + f^\alpha c^\beta / s$. This elegantly balances
+recency (via the clock), frequency, cost, and size in a single framework.
+
+\textbf{Hyperbolic Caching}~\cite{hyperbolic} assigns priority based on
+the ratio of cost to the product of size and time-since-last-access,
+providing a theoretically grounded approximation to Belady's optimal
+algorithm generalised for variable-size, variable-cost items.
+
+\subsection{Cost-Aware Caching Theory}
+The theoretical foundations for cost-aware caching originate from the
+weighted caching problem~\cite{young2002onlinefilecaching}, where each
+item $i$ has an associated miss penalty $w_i$, and the objective is to
+minimise total weighted misses. Cao et al.~\cite{cao1997costaware} showed
+that the Greedy-Dual algorithm achieves a competitive ratio of $k$
+(where~$k$ is cache capacity in items) for the weighted caching problem,
+matching the lower bound for deterministic online algorithms. The key
+insight is that optimal eviction under heterogeneous costs requires
+balancing multiple factors simultaneously.
+
+\subsection{Attention-Level Caching in Transformers}
+Recent work has explored caching at the attention mechanism level.
+\textbf{H2O (Heavy-Hitter Oracle)}~\cite{h2o} identifies important tokens
+in the KV-cache based on attention scores and preferentially retains them.
+\textbf{CachedAttention}~\cite{cachedattention} stores attention states
+across requests for shared prefixes. \textbf{ForesightKV}~\cite{foresightkv}
+uses future attention prediction to determine which KV-cache entries to
+retain. While these operate at a different abstraction level than response
+caching, they share the principle that not all cached items are equally
+valuable~---~a principle we apply at the response level using economic
+cost as the value signal.
+
+%% ============================================================================
+\section{System Design}
+\label{sec:design}
+
+\subsection{Architecture Overview}
+Our cost-aware eviction policy integrates into GPTCache's modular pipeline
+as a drop-in replacement for the default LRU eviction manager. An incoming
+query is embedded via a sentence transformer; the vector store returns the
+nearest cached query if similarity exceeds the threshold. On a
+\emph{cache hit}, the GDSF manager increments the frequency counter for
+the matched entry and updates its priority. On a \emph{cache miss}, the
+LLM generates a response and~---~if the cache is full~---~the GDSF
+manager evicts the minimum-priority entry. The new entry is inserted with
+its computed generation cost, response size, and initial frequency of~$1$.
+
+\subsection{GDSF Algorithm}
+The core of our approach is the GDSF priority function:
+\begin{equation}
+  \text{Priority}(i) \;=\; L \;+\; \frac{\text{freq}(i)^{\alpha} \cdot \text{cost}(i)^{\beta}}{\text{size}(i)},
+  \label{eq:gdsf}
+\end{equation}
+where $L$ is the global clock value (initialised to $0$, inflated upon
+each eviction), $\text{freq}(i)$ is the access frequency count for
+entry~$i$, $\text{cost}(i)$ is the estimated generation cost (in dollars),
+$\text{size}(i)$ is the response size (in tokens or bytes), and
+$\alpha, \beta$ are non-negative weights on frequency and cost
+respectively (default $\alpha = \beta = 1$).
+
+\paragraph{Intuition.}
+Equation~\eqref{eq:gdsf} encodes the following reasoning: an entry should
+be retained if it is (a)~frequently accessed (high $\text{freq}$),
+(b)~expensive to regenerate (high $\text{cost}$), and (c)~compact relative
+to its value (low $\text{size}$). The clock~$L$ provides an aging
+mechanism~---~when an item is evicted, $L$ is set to that item's priority,
+ensuring that items not accessed since the last eviction will have
+relatively lower priorities, thus incorporating recency without explicit
+timestamps.
+
+\begin{lstlisting}[caption={GDSF eviction for LLM cache (pseudocode).}, label=lst:gdsf-pseudo]
+Initialize: L <- 0, H <- empty min-heap
+
+function INSERT(key, response, cost, size):
+    freq[key] <- 1
+    priority  <- L + (freq[key]^alpha * cost^beta) / size
+    H.insert(key, priority)
+
+function ACCESS(key):
+    freq[key] <- freq[key] + 1
+    priority  <- L + (freq[key]^alpha * cost[key]^beta) / size[key]
+    H.update_priority(key, priority)
+
+function EVICT():
+    (victim_key, victim_priority) <- H.extract_min()
+    if victim_priority > L:              # monotone clock invariant
+        L <- victim_priority
+    delete cache[victim_key]
+    return victim_key
+\end{lstlisting}
+
+\subsection{Cost Estimation}
+For LLM responses, generation cost is estimated using the token-based
+pricing model:
+\begin{equation}
+  \text{cost}(i) \;=\; \text{input\_tokens}(i) \cdot p_{\text{in}} \;+\; \text{output\_tokens}(i) \cdot p_{\text{out}},
+  \label{eq:cost}
+\end{equation}
+where $p_{\text{in}}$ and $p_{\text{out}}$ are per-token prices for the
+target model (e.g., $\$0.03/\text{1K}$ input tokens and $\$0.06/\text{1K}$
+output tokens for GPT-4). In our experimental setup, we simulate
+heterogeneous costs by assigning cost values drawn from specified
+distributions (uniform, log-normal, bimodal) to represent the diversity of
+real LLM queries.
+
+\subsection{Data Structure and Complexity}
+We implement the priority queue as an \textbf{indexed binary min-heap}
+backed by a hash map for $O(1)$ key-to-index lookups (see
+Table~\ref{tab:complexity}).
+
+\begin{table}[t]
+  \centering
+  \caption{Per-operation complexity of the indexed min-heap.}
+  \label{tab:complexity}
+  \begin{tabular}{lr}
+    \toprule
+    Operation & Complexity \\
+    \midrule
+    Insert                    & $O(\log n)$ \\
+    Access (priority update)  & $O(\log n)$ \\
+    Evict (extract-min)       & $O(\log n)$ \\
+    Lookup (by key)           & $O(1)$      \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+This represents a modest overhead compared to LRU's $O(1)$ operations.
+However, since LLM inference latency dominates (typically
+$500\,\text{ms}$--$5\,\text{s}$ per query), the microsecond-scale heap
+operations are negligible in practice.
+
+\subsection{Integration with GPTCache}
+GPTCache defines an \texttt{EvictionBase} abstract class with methods
+\texttt{put()}, \texttt{get()}, and \texttt{evict()}. Our GDSF
+implementation extends this interface as shown in
+Listing~\ref{lst:gdsf-python}. Existing GPTCache deployments can adopt
+cost-aware eviction by changing a single configuration parameter.
+
+\begin{lstlisting}[caption={GDSF plugin for GPTCache (excerpt from \texttt{src/cost\_aware\_eviction/eviction\_manager.py}).}, label=lst:gdsf-python]
+class GDSFEviction(EvictionBase):
+    def __init__(self, alpha=1.0, beta=1.0, max_size=1000):
+        self._clock = 0.0
+        self.alpha, self.beta = alpha, beta
+        self._heap = IndexedMinHeap()
+        self._metadata = {}     # key -> {freq, cost, size}
+
+    def put(self, key, cost, size):
+        self._metadata[key] = {"freq": 1, "cost": cost, "size": size}
+        self._heap.push(key, self._priority(key))
+
+    def get(self, key):
+        self._metadata[key]["freq"] += 1
+        self._heap.update(key, self._priority(key))
+
+    def evict(self):
+        key, priority = self._heap.pop()
+        if priority > self._clock:      # monotone clock invariant
+            self._clock = priority
+        del self._metadata[key]
+        return key
+\end{lstlisting}
+
+%% ============================================================================
+\section{Experimental Setup}
+\label{sec:setup}
+
+\subsection{Workload Design}
+We evaluate across six synthetic workload types, each comprising
+$10{,}000$ queries. Cache size is swept across $\{5\text{k}, 10\text{k},
+25\text{k}, 50\text{k}\}$ entries so we can see how each policy's
+advantage scales with available capacity.
+\begin{enumerate}[leftmargin=1.4em]
+  \item \textbf{Uniform Cost:} All queries have identical cost (\$0.05).
+        Control condition~---~cost-aware policies should offer no
+        advantage.
+  \item \textbf{High-Variance Cost:} Costs drawn from a log-normal with
+        mean~\$0.05 and stdev~\$0.04.
+  \item \textbf{Zipf Popularity:} Popularity follows Zipf ($s=1.2$) with
+        heterogeneous costs.
+  \item \textbf{Bursty Access:} Temporal bursts followed by dormancy.
+  \item \textbf{Adversarial (Anti-LRU):} Sequential scan interleaved with
+        periodic hits on high-cost anchor items.
+  \item \textbf{Size-Varying:} Response sizes span $10\times$
+        ($100$--$1000$ tokens); cost scales sub-linearly with size.
+\end{enumerate}
+
+\subsection{Metrics}
+\textbf{Hit Rate (HR)}~---~fraction of queries served from cache.
+\textbf{Cost-Weighted Hit Rate (CWHR)}~---~$\sum_{i \in \text{hits}}
+\text{cost}(i) \,/\, \sum_{i \in \text{all}} \text{cost}(i)$.
+\textbf{Dollar Savings}, \textbf{Latency Overhead}, \textbf{Throughput},
+and \textbf{Memory Overhead}.
+
+\subsection{Baselines}
+We compare GDSF against \textbf{LRU}, \textbf{FIFO}, \textbf{LFU}, and
+\textbf{Random}.
+
+\subsection{Statistical Methodology}
+\label{sec:stats-method}
+Each experiment is repeated for $30$ independent runs with different
+random seeds (pinned for reproducibility). We report:
+\begin{itemize}[leftmargin=1.4em]
+  \item Point estimates as means across runs.
+  \item $95\%$ confidence intervals via \textbf{BCa
+        (bias-corrected~\&~accelerated) bootstrap}~\cite{efron1987bca}
+        with $10{,}000$ resamples on the paired difference
+        $\text{CWHR}_{\text{GDSF}} - \text{CWHR}_{\text{LRU}}$,
+        RNG seed pinned to \texttt{20260721}.
+  \item Statistical significance via \textbf{paired $t$-tests}
+        (paired by (seed, cache size), $n=120$ per workload) with
+        \textbf{Bonferroni correction} across the six workloads.
+\end{itemize}
+All statistical outputs are produced by
+\texttt{scripts/compute\_statistics.py}, which reads
+\texttt{results/benchmark\_results\_<ts>.json} and writes
+\texttt{results/stats\_<ts>.json}. Every numeric claim of the form
+``$\Delta\text{CWHR} = \ldots$, $95\%$ BCa CI~$[\cdot,\cdot]$,
+paired~$t = \ldots$, $p_{\text{Bonf}} = \ldots$'' in
+Section~\ref{sec:results} resolves to a key in that stats JSON.
+
+\subsection{Environment}
+All experiments run in a Docker container with $4$ CPU cores (pinned),
+$8$~GB RAM, Python~$3.10$, GPTCache~$0.1.43$, no GPU (eviction policy
+operates on metadata only), and disk I/O isolated via tmpfs. Timing
+measurements use \texttt{time.perf\_counter\_ns()} with warmup iterations.
+
+%% ============================================================================
+\section{Results}
+\label{sec:results}
+
+All numbers in this section come from the $30$-run benchmark suite we ran
+on 2026-07-21 (\texttt{results/benchmark\_results\_20260721\_191113.json},
+$3{,}600$ experiments total: $5$~policies $\times$ $6$~workloads $\times$
+$4$~cache sizes $\times$ $30$~seeds). Per-workload tables aggregate across
+all four cache sizes, so each cell is a mean over $n=120$ runs
+($30$ seeds $\times$ $4$ cache sizes). Statistical tests follow
+Section~\ref{sec:stats-method}. Per-cache-size trajectories are shown in
+Figure~\ref{fig:hitrate-vs-size} and Figure~\ref{fig:cwhr-vs-size}.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.98\linewidth]{fig1_hit_rate_vs_cache_size.pdf}
+  \caption{Hit rate vs.\ cache size across all workloads and policies. On
+           homogeneous workloads (\texttt{uniform\_cost},
+           \texttt{zipf\_variable\_cost}) all policies overlap; on
+           heterogeneous workloads GDSF diverges upward as capacity grows.}
+  \label{fig:hitrate-vs-size}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.98\linewidth]{fig2_cwhr_vs_cache_size.pdf}
+  \caption{Cost-weighted hit rate vs.\ cache size. GDSF opens a visible
+           gap over LRU/FIFO on \texttt{high\_variance\_cost},
+           \texttt{bursty}, \texttt{adversarial\_lru}, and
+           \texttt{size\_varying}.}
+  \label{fig:cwhr-vs-size}
+\end{figure}
+
+%% -- 5.1 High-variance -------------------------------------------------------
+\subsection{High-Variance Cost Workload}
+The high-variance cost workload draws per-query costs from a trimodal
+distribution ($60\%$ cheap GPT-3.5 at $\sim\$0.002$, $30\%$ medium GPT-4
+at $\sim\$0.06$, $10\%$ expensive GPT-4-32k at $\sim\$0.12$) and is the
+workload where cost heterogeneity dominates.
+
+\begin{table}[t]
+  \centering
+  \caption{High-variance cost workload results (mean over $n=120$).}
+  \label{tab:highvar}
+  \begin{tabular}{lrrr}
+    \toprule
+    Policy & Hit Rate & CWHR & \$ Saved \\
+    \midrule
+    LRU     & 0.4629 & 0.4628 & \$142.95 \\
+    FIFO    & 0.4631 & 0.4630 & \$143.01 \\
+    LFU     & 0.4627 & 0.4622 & \$142.74 \\
+    Random  & 0.4631 & 0.4629 & \$142.98 \\
+    \textbf{GDSF} & \textbf{0.4011} & \textbf{0.5818} & \textbf{\$179.67} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+GDSF gives up $6$ percentage points of raw hit rate ($0.401$ vs.\ $0.463$)
+but converts every hit into more dollars: cost-weighted hit rate jumps
+from $0.463$ to $0.582$ ($\Delta\text{CWHR} = +0.1190$, $95\%$ BCa~CI
+$[+0.1024, +0.1358]$, paired~$t = 13.85$, $p_{\text{Bonf}} =
+8.6\!\times\!10^{-26}$), and dollar savings rise from \$142.95 to
+\$179.67~---~a \textbf{$+25.7\%$ improvement}. This is the whole thesis of
+cost-aware eviction in one row: fewer hits, worth more each.
+
+%% -- 5.2 Bursty --------------------------------------------------------------
+\subsection{Bursty Workload}
+The bursty workload concentrates access on a rotating small set of ``hot''
+items, with heterogeneous costs~---~similar to real chat traffic where
+topics come in waves.
+
+\begin{table}[t]
+  \centering
+  \caption{Bursty workload results (mean over $n=120$).}
+  \label{tab:bursty}
+  \begin{tabular}{lrrr}
+    \toprule
+    Policy & Hit Rate & CWHR & \$ Saved \\
+    \midrule
+    LRU     & 0.5022 & 0.5034 & \$201.04 \\
+    FIFO    & 0.5018 & 0.5032 & \$200.97 \\
+    LFU     & 0.3865 & 0.3880 & \$155.02 \\
+    Random  & 0.5005 & 0.5014 & \$200.23 \\
+    \textbf{GDSF} & \textbf{0.5179} & \textbf{0.6660} & \textbf{\$265.82} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+GDSF wins on both hit rate and CWHR ($\Delta\text{CWHR} = +0.1626$,
+$95\%$ BCa~CI $[+0.1496, +0.1749]$, paired~$t = 25.31$,
+$p_{\text{Bonf}} = 5.9\!\times\!10^{-49}$, $+32.3\%$ dollar savings). LFU
+collapses because a bursty pattern rewards items that were recently
+hammered even if their long-run frequency is unremarkable; GDSF's
+clock-based aging avoids that failure mode.
+
+%% -- 5.3 Adversarial --------------------------------------------------------
+\subsection{Adversarial (Anti-LRU) Workload}
+This workload interleaves a sequential scan of cheap one-shot queries
+with periodic hits on high-cost anchor items. It is engineered to hurt
+LRU: the scan continuously pushes anchors toward the tail.
+
+\begin{table}[t]
+  \centering
+  \caption{Adversarial workload results (mean over $n=120$).}
+  \label{tab:adversarial}
+  \begin{tabular}{lrrr}
+    \toprule
+    Policy & Hit Rate & CWHR & \$ Saved \\
+    \midrule
+    LRU     & 0.7355 & 0.7560 & \$44.14 \\
+    FIFO    & 0.7354 & 0.7524 & \$43.94 \\
+    LFU     & 0.7393 & 0.8327 & \$48.63 \\
+    Random  & 0.8893 & 0.8347 & \$48.74 \\
+    \textbf{GDSF} & 0.8286 & \textbf{0.8978} & \textbf{\$52.42} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+GDSF wins on CWHR ($\Delta\text{CWHR} = +0.1419$, $95\%$ BCa~CI
+$[+0.1003, +0.1894]$, paired~$t = 6.28$,
+$p_{\text{Bonf}} = 3.4\!\times\!10^{-8}$, $+18.8\%$ dollar savings).
+Random happens to have a higher raw hit rate here because it accidentally
+keeps some anchors, but its cost-weighted result is lower~---~a nice
+illustration of why raw hit rate is the wrong metric for this problem.
+
+%% -- 5.4 Size-varying --------------------------------------------------------
+\subsection{Size-Varying Workload}
+Here response sizes span three orders of magnitude ($50\,\text{B}$ to
+$50\,\text{kB}$ via a clipped log-normal) while cost scales sub-linearly
+with size. It stresses the $\text{size}(i)$ term in the GDSF priority: an
+entry that is $10\times$ the size only earns cache real-estate if it is
+more than $10\times$ more valuable.
+
+\begin{table}[t]
+  \centering
+  \caption{Size-varying workload results (mean over $n=120$).}
+  \label{tab:sizevar}
+  \begin{tabular}{lrrr}
+    \toprule
+    Policy & Hit Rate & CWHR & \$ Saved \\
+    \midrule
+    LRU     & 0.1829 & 0.1794 & \$11.75 \\
+    FIFO    & 0.1828 & 0.1795 & \$11.76 \\
+    LFU     & 0.1936 & 0.1837 & \$12.04 \\
+    Random  & 0.1819 & 0.1784 & \$11.68 \\
+    \textbf{GDSF} & \textbf{0.3541} & \textbf{0.3426} & \textbf{\$22.44} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The largest relative dollar win in the whole study:
+$+91.0\%$ dollar savings vs.\ LRU ($\Delta\text{CWHR} = +0.1632$,
+$95\%$ BCa~CI $[+0.1525, +0.1729]$, paired~$t = 31.32$,
+$p_{\text{Bonf}} = 1.6\!\times\!10^{-58}$). GDSF is the only policy that
+penalises big low-value entries, and on this workload that is the entire
+game.
+
+%% -- 5.5 Uniform ------------------------------------------------------------
+\subsection{Uniform Cost Workload (Control)}
+
+\begin{table}[t]
+  \centering
+  \caption{Uniform cost workload results (mean over $n=120$).}
+  \label{tab:uniform}
+  \begin{tabular}{lrrr}
+    \toprule
+    Policy & Hit Rate & CWHR & \$ Saved \\
+    \midrule
+    LRU     & 0.4124 & 0.4124 & \$4{,}123.70 \\
+    FIFO    & 0.4125 & 0.4125 & \$4{,}124.63 \\
+    LFU     & 0.4125 & 0.4125 & \$4{,}124.53 \\
+    Random  & 0.4124 & 0.4124 & \$4{,}123.94 \\
+    GDSF    & 0.4124 & 0.4124 & \$4{,}123.91 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+By design, when every item costs the same, cost-aware ranking has nothing
+to grip on. All five policies land within $0.03\%$ of each other. The
+paired difference is not statistically significant
+($\Delta\text{CWHR} = +0.00003$, $95\%$ BCa~CI $[-0.0004, +0.0005]$,
+paired~$t = 0.09$, $p_{\text{Bonf}} = 1.00$). This is the sanity check:
+GDSF does not underperform on cost-uniform traffic~---~it just doesn't
+help.
+
+%% -- 5.6 Zipf ---------------------------------------------------------------
+\subsection{Zipf-Popular Workload (Cache Fits Working Set)}
+
+\begin{table}[t]
+  \centering
+  \caption{Zipf popularity workload results (mean over $n=120$).}
+  \label{tab:zipf}
+  \begin{tabular}{lrrr}
+    \toprule
+    Policy & Hit Rate & CWHR & \$ Saved \\
+    \midrule
+    LRU     & 0.9857 & 0.8897 & \$21.60 \\
+    FIFO    & 0.9839 & 0.8868 & \$21.53 \\
+    LFU     & 0.9859 & 0.8902 & \$21.61 \\
+    Random  & 0.9844 & 0.8876 & \$21.55 \\
+    GDSF    & 0.9856 & 0.8894 & \$21.59 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+When the Zipf head fits comfortably in cache, every policy hits $>97\%$
+of the time and there is essentially no eviction pressure. GDSF is within
+one cent of LRU on dollars ($\Delta\text{CWHR} = -0.0003$, $95\%$
+BCa~CI $[-0.0005, -0.0002]$, paired~$t = -4.08$, $p_{\text{Bonf}} =
+4.9\!\times\!10^{-4}$). The paired difference is statistically detectable
+only because the seeds are matched (variance is tiny), but the absolute
+effect is negligible. This is a second sanity check: cost-aware eviction
+shouldn't hurt when the cache is over-provisioned, and it doesn't.
+
+%% -- 5.7 Latency -------------------------------------------------------------
+\subsection{Latency and Throughput}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig4_latency_cdf.pdf}
+  \caption{Latency CDF (log-scale) per policy, aggregated across all
+           workloads.}
+  \label{fig:latency-cdf}
+\end{figure}
+
+\begin{table}[t]
+  \centering
+  \caption{Operational performance (mean over $n=120$, high-variance workload).}
+  \label{tab:latency}
+  \small
+  \begin{tabular}{lrrrr}
+    \toprule
+    Policy  & p50 ($\mu$s) & p95 ($\mu$s) & Ops/s & Memory/entry \\
+    \midrule
+    LRU     & 1.6 & 3.4    & 250{,}603 & 56\,B \\
+    FIFO    & 1.4 & 3.3    & 265{,}726 & 56\,B \\
+    LFU     & 21.2 & 181.0 &  99{,}361 & 56\,B \\
+    Random  & 3.3 & 15.8   & 188{,}012 & 56\,B \\
+    \textbf{GDSF} & \textbf{11.0} & \textbf{27.1} & \textbf{57{,}882} & \textbf{56\,B} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+GDSF is $\sim7\times$ slower per operation than LRU at the median and
+$\sim8\times$ slower at p95, but the absolute cost
+($\sim11\,\mu\text{s}$ median, $\sim27\,\mu\text{s}$ p95) is dwarfed by
+any real LLM call ($100\,\text{ms}$--$5\,\text{s}$ of network~+~inference).
+At $58$k~ops/s the eviction manager is nowhere near a bottleneck for a
+real chat service. Memory overhead is identical across policies at this
+configuration because each policy stores the same
+\texttt{EntryMetadata} record.
+
+%% -- 5.8 Sensitivity --------------------------------------------------------
+\subsection{Sensitivity to Parameters}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig5_ablation_heatmap.pdf}
+  \caption{Ablation heatmap of CWHR across the $\alpha \times \beta$ grid
+           for each workload.}
+  \label{fig:ablation}
+\end{figure}
+
+We swept $\alpha \in \{0.5, 0.8, 1.0, 1.2, 1.5, 2.0\}$ and
+$\beta \in \{0.5, 0.8, 1.0, 1.2, 1.5, 2.0\}$ on each workload. On the
+workloads where GDSF wins (high-variance, bursty, adversarial,
+size-varying), the default $(\alpha, \beta) = (1.0, 1.0)$ is within
+$\sim5\%$ of the best point on the grid. On uniform-cost and
+Zipf-when-cache-fits, the grid is essentially flat.
+
+Practical guidance: leave $\alpha = \beta = 1.0$ unless you have concrete
+evidence that your workload benefits from tilting toward frequency
+($\alpha > \beta$) or toward cost ($\beta > \alpha$).
+
+%% ============================================================================
+\section{Discussion}
+\label{sec:discuss}
+
+\subsection{When Does GDSF Help?}
+Our results delineate three regimes.
+\textbf{High benefit}: workloads with heterogeneous generation costs
+benefit substantially~---~$+25.7\%$ on high-variance-cost, $+91.0\%$ on
+size-varying, $+18.8\%$ on adversarial anti-LRU, $+32.3\%$ on bursty.
+\textbf{Moderate benefit}: bursty patterns with moderate cost variance
+sit in the $+20$--$35\%$ range. \textbf{No benefit}: uniform-cost and
+Zipf-when-cache-fits, by design, provide no signal for cost-aware
+policies to exploit; GDSF is statistically indistinguishable from LRU,
+confirming it introduces no pathological behaviour.
+
+\subsection{The Hit Rate vs.\ Cost Savings Trade-off}
+A key finding is that \emph{maximising hit rate and maximising cost
+savings are conflicting objectives} under heterogeneous costs. On the
+high-variance workload, LRU achieves a higher raw hit rate ($0.463$ vs.\
+GDSF's~$0.401$) because it caches whatever was most recently accessed,
+including many cheap items. GDSF deliberately sacrifices some of those
+cheap hits to retain expensive items, and the result is that each
+remaining hit is worth more in dollars~---~CWHR climbs from $0.463$ to
+$0.582$. This is analogous to the precision-recall trade-off in
+information retrieval: GDSF optimises for ``precision'' (value per hit)
+while LRU optimises for ``recall'' (total hits).
+
+\subsection{Connection to Theoretical Foundations}
+Our empirical results align with the theoretical predictions from
+Greedy-Dual analysis. Cao et al.~\cite{cao1997costaware} proved that
+Greedy-Dual achieves the optimal competitive ratio for weighted caching
+among deterministic online algorithms. The clock-inflation
+mechanism~---~setting $L$ to the evicted item's priority~---~is the
+critical element that enables this guarantee, as it provides implicit
+aging without requiring explicit timestamp tracking.
+
+\subsection{Limitations}
+(1)~$O(\log n)$ operations are negligible for current LLM serving rates
+but may become critical in microsecond-inference systems.
+(2)~Parameter sensitivity: default $\alpha=\beta=1$ performs well but
+extreme workloads may benefit from tuning.
+(3)~Frequency accumulation: like LFU, GDSF's counters grow without bound,
+allowing frequency pollution; periodic halving is one mitigation.
+(4)~Cost estimation accuracy: our approach assumes cost can be estimated
+at insertion time.
+(5)~Synthetic workloads: production LLM query logs would strengthen the
+conclusions.
+
+\subsection{Practical Deployment Considerations}
+\emph{When to adopt GDSF:} if your LLM workload involves multiple models
+(e.g., GPT-3.5 for simple queries, GPT-4 for complex ones) or response
+lengths vary significantly, GDSF will likely provide meaningful cost
+savings. \emph{When LRU suffices:} uniform-cost, uniform-size traffic.
+\emph{Migration path:} GDSF is a drop-in replacement with zero
+configuration changes; monitor CWHR alongside hit rate to validate cost
+savings.
+
+%% ============================================================================
+\section{Conclusion and Future Work}
+\label{sec:conclude}
+
+We presented a cost-aware eviction policy for LLM response caches based
+on the Greedy-Dual-Size-Frequency algorithm. Across six workloads and
+four cache sizes, our approach achieves significantly better
+cost-efficiency than traditional policies on heterogeneous workloads:
+\textbf{$+25.7\%$} dollar savings on high-variance-cost, \textbf{$+32.3\%$}
+on bursty, \textbf{$+91.0\%$} on size-varying, and \textbf{$+18.8\%$} on
+anti-LRU adversarial (all Bonferroni-corrected $p<10^{-7}$), with
+\emph{no degradation} on uniform-cost or Zipf-when-cache-fits, and modest
+overhead ($\sim11\,\mu$s median~/~$\sim27\,\mu$s p95 per operation).
+
+\paragraph{Future work.}
+\emph{Adaptive parameters} via multi-armed bandit tuning on a sliding
+window; \emph{approximate frequency tracking} via Count-Min
+Sketch~\cite{countminsketch}; \emph{W-TinyLFU integration}~\cite{tinylfu}
+combining admission filtering with cost-aware eviction;
+\emph{production validation} on real LLM billing data; and
+\emph{multi-tier caching} extending cost-awareness to memory~+~SSD~+~remote
+tiers.
+
+%% ============================================================================
+\section*{Reproducibility}
+\label{sec:repro}
+
+All code, workload generators, and analysis scripts are open-source at
+\url{https://github.com/nissimbrami/caching-course-project} (MIT license).
+The results in this paper were produced from commit
+\texttt{00eee60} on 2026-07-21.
+
+\begin{lstlisting}[language=bash, caption={End-to-end reproduction from a clean checkout.}]
+git clone https://github.com/nissimbrami/caching-course-project
+cd caching-course-project/task2-final-project/code
+pip install -r requirements.txt && pip install -e .
+
+# 1. Full test suite (259 tests + 60 hypothesis runs)
+pytest -q
+
+# 2. 30-seed benchmark, 6 workloads x 5 policies x 4 cache sizes
+python -m benchmarks.run_all --n-runs 30 --output-dir results/
+
+# 3. Statistics: paired-t + Bonferroni + BCa 10k bootstrap (seed 20260721)
+python scripts/compute_statistics.py
+
+# 4. Ablation over alpha x beta grid
+python scripts/run_ablation.py --num-runs 30 --output-dir results/ablation
+
+# 5. Plots (Figures 1-8)
+python scripts/generate_plots.py --input-dir results --output-dir results/plots
+\end{lstlisting}
+
+Random seeds are pinned; the bootstrap RNG seed is
+\texttt{20260721}. All numeric claims in Section~\ref{sec:results}
+resolve to keys in
+\texttt{results/stats\_20260721\_191113.json}.
+
+%% ============================================================================
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references}
+
+\end{document}

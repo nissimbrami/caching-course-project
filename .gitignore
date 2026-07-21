@@ -29,3 +29,14 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# LaTeX build artefacts (keep report.pdf checked in, ignore intermediates)
+task2-final-project/report-latex/*.aux
+task2-final-project/report-latex/*.log
+task2-final-project/report-latex/*.blg
+task2-final-project/report-latex/*.bbl
+task2-final-project/report-latex/*.out
+task2-final-project/report-latex/*.toc
+task2-final-project/report-latex/*.synctex.gz
+task2-final-project/report-latex/*.fdb_latexmk
+task2-final-project/report-latex/*.fls

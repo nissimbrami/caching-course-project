@@ -17,6 +17,10 @@ htmlcov/
 # Old / draft presentation artifacts (kept locally only)
 task1-presentation/RadixAttention_Presentation*.pptx
 
+# Reference decks (prof's Chapter 1, prior student SCALM, course intro) --
+# copyright the original authors; kept locally for style reference only.
+task1-presentation/reference-decks/
+
 # OS
 .DS_Store
 Thumbs.db

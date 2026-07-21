@@ -1,0 +1,482 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{parskip}
+\usepackage{amsmath}
+
+% ---- Colours matching the deck --------------------------------------------
+\definecolor{navy}{HTML}{0B1F3A}
+\definecolor{accent}{HTML}{E67E22}
+\definecolor{blue1}{HTML}{2E86AB}
+\definecolor{muted}{HTML}{666666}
+
+% ---- Section styling ------------------------------------------------------
+\titleformat{\section}
+  {\color{navy}\Large\bfseries}{\thesection}{0.6em}{}
+\titleformat{\subsection}
+  {\color{blue1}\large\bfseries}{\thesubsection}{0.5em}{}
+
+% ---- Title ---------------------------------------------------------------
+\title{
+  \vspace{-1cm}
+  {\color{navy}\Huge Caching in LLMs --- Project Overview}\\[0.3em]
+  {\color{blue1}\Large Four 10-minute reads that cover the whole project}
+}
+\author{Nissim Brami \\[-0.2em]
+  {\small \texttt{nissimbrami@post.bgu.ac.il}} \\[-0.2em]
+  {\small Ben-Gurion University of the Negev \textbullet{} Prof. Gil Einziger}}
+\date{}
+
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+
+\noindent
+This document is the ``explain-me-the-whole-project'' single page. It is
+written for someone who has \textbf{not read the paper} and has \textbf{not
+used GPTCache}. Read the four parts below in order. Each takes about 10
+minutes at a normal reading pace. If you can hold these four sections in
+your head, you can explain the whole project to anyone.
+
+\medskip
+Full detail lives in the rest of the repository:
+\begin{itemize}[leftmargin=1.2em,itemsep=0.15em]
+  \item Task 1 (StreamingLLM presentation): \texttt{task1-presentation/}
+  \item Task 2 (GDSF cost-aware eviction for GPTCache): \texttt{task2-final-project/}
+\end{itemize}
+
+% =========================================================================
+\section{What the StreamingLLM paper is (10 minutes)}
+% =========================================================================
+
+\subsection{The problem, in one sentence}
+Large language models cannot \textbf{keep talking to you} for hours on end
+without either running out of memory or producing gibberish. The
+StreamingLLM paper explains why, and fixes it in about 50 lines of code.
+
+\subsection{The setting}
+When you type into ChatGPT or a similar system, the model generates one
+token at a time. To generate token $T{+}1$, it has to look at every token
+from $1$ through $T$. Recomputing that lookup from scratch every step would
+be quadratic ($O(T^{2})$), so the model keeps a \textbf{KV cache}~--- a
+list of key/value vectors, one per past token, sitting in GPU memory. This
+is the object the paper is about.
+
+Two ugly facts about the KV cache:
+\begin{enumerate}[leftmargin=1.5em,itemsep=0.1em]
+  \item It \textbf{grows linearly} with the length of the conversation. A
+        7-billion-parameter model at 4{,}000 tokens uses~$\sim$2\,GB of KV
+        cache in FP16. Long conversations eventually don't fit in GPU
+        memory.
+  \item Language models were only pre-trained on some fixed window (say
+        4{,}000 tokens). If the cache holds more, the positional
+        encodings inside the model go out of distribution and quality
+        collapses.
+\end{enumerate}
+
+So there is a hard cap on how long a conversation can be. Once you hit it,
+you have three obvious options~--- and \textbf{all three are broken}.
+
+\subsection{The three broken baselines}
+Llama-2-13B, first book of PG19, 65{,}000 tokens. Perplexity, lower is
+better.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Baseline} & \textbf{Cost} & \textbf{Perplexity} \\
+\midrule
+Dense attention (keep all)               & $O(T^2)$   & 5641 (broken, then OOM) \\
+Window attention (keep last $L$)         & $O(TL)$    & \textbf{5158} --- gibberish \\
+Window + recompute (rebuild every step)  & $O(TL^2)$  & 5.43 (correct, too slow) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The mystery is line 2. Keeping only the most recent tokens should be the
+cheapest reasonable strategy. But the model completely falls apart~---
+from a fluent perplexity of 5-ish to 5158. Why?
+
+\subsection{The observation --- attention sinks}
+When the authors visualized where a language model looks, they saw
+something odd: \textbf{starting from layer 3 onward, every attention head
+in every layer of every model tested (Llama-2, MPT, Falcon, Pythia)
+heavily attends to the very first few tokens}~--- regardless of what
+those tokens actually say. They named these initial tokens
+\textbf{attention sinks}.
+
+Why? Because the softmax function that produces attention weights
+\textbf{must sum to one}. The model always has a fixed budget of attention
+mass to spend at every step, whether the context deserves it or not. That
+excess mass has to land somewhere. And in a decoder-only model, the tokens
+visible to \emph{every} subsequent position are the initial ones. They
+become the natural dumping ground.
+
+The moment you evict the first token from the cache, you rip a huge chunk
+out of the softmax denominator, and every remaining attention weight in
+the row gets renormalized. The whole attention distribution warps.
+Perplexity $\to 5158$.
+
+\subsection{The clincher experiment}
+Is it the content of the first tokens that matters, or just their
+\emph{position}? The cleanest ablation in the paper: replace the first
+four tokens with linebreak characters (\texttt{\textbackslash n}). Nothing
+else changes.
+
+\begin{center}
+\begin{tabular}{lc}
+\toprule
+\textbf{Configuration} & \textbf{Perplexity} \\
+\midrule
+Window, no sinks                                & 5158.07 \\
+StreamingLLM (4 real tokens + 1020 rolling)     & \textbf{5.40} \\
+StreamingLLM with linebreaks at positions 0--3  & 5.60 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Almost identical. \textbf{The tokens' positions do the work, not their
+content.} Sinks are structural, not semantic.
+
+\subsection{The fix (StreamingLLM)}
+Trivial once you've seen the mechanism:
+\begin{enumerate}[leftmargin=1.5em,itemsep=0.1em]
+  \item Always keep the \textbf{first 4 tokens} in the cache. Never evict.
+  \item Also keep the \textbf{last $L$ tokens} in a rolling window (FIFO).
+  \item Everything between the sinks and the rolling window is discarded.
+  \item \textbf{Renumber position IDs inside the cache}, not in the
+        original text. If the cache holds tokens with original positions
+        [0,1,2,3,6,7,8] and we're decoding position 9, the model sees
+        positions [0,1,2,3,4,5,6,7]. Sinks and window become adjacent
+        in position space.
+\end{enumerate}
+
+No fine-tuning. No new model architecture. About 50 lines of PyTorch on
+top of a Hugging Face model.
+
+\subsection{The results}
+\begin{itemize}[leftmargin=1.5em,itemsep=0.1em]
+  \item \textbf{Perplexity flat past 4{,}000{,}000 tokens} on ten models:
+        Llama-2 \{7B, 13B, 70B\}, MPT \{7B, 30B\}, Falcon \{7B, 40B\},
+        Pythia \{2.8B, 6.9B, 12B\}.
+  \item \textbf{Up to 22.2$\times$ faster} per token than the
+        sliding-window-with-recomputation baseline.
+  \item Streaming QA (concatenated ARC) matches or slightly beats the
+        one-shot-per-question oracle. Meanwhile window attention
+        collapses to 0.12\% on 70B.
+\end{itemize}
+
+\subsection{The limitations}
+Honest about them: it does \textbf{not} extend the context window, it
+underperforms simple truncation on long-document QA (LongBench), bigger
+cache does not monotonically lower perplexity, and it does not compare to
+content-aware evictors (H2O, SnapKV). Adopted upstream within months:
+NVIDIA TensorRT-LLM, HF Transformers, Intel Extension for Transformers,
+MLC LLM.
+
+\textbf{One-line summary:} StreamingLLM is a small, robust, honest
+empirical fix for a softmax quirk, and it is exactly the kind of paper a
+caching class should present because it \emph{is} a cache eviction policy.
+
+% =========================================================================
+\section{What we did for Task 1 (10 minutes)}
+% =========================================================================
+
+\subsection{The assignment}
+Prof.\ Einziger's Task 1: pick a recent caching-in-LLMs paper, present it
+to the class in a $\sim$60-minute lecture. Deliverables: PowerPoint deck +
+speaker notes + optional supporting materials.
+
+\subsection{The paper we chose}
+\emph{Efficient Streaming Language Models with Attention Sinks} by Xiao,
+Tian, Chen, Han, Lewis (ICLR 2024). The paper summarized in \S1 above.
+Why this paper for a caching audience:
+\begin{itemize}[leftmargin=1.5em,itemsep=0.1em]
+  \item It is \emph{literally} a paper about a cache eviction policy~---
+        the KV cache in a language model.
+  \item It uses course vocabulary (capacity, eviction, hit, miss) without
+        ever using the word ``cache''.
+  \item It has a clean empirical result and an honest limits section,
+        which makes for a good 60-minute talk.
+  \item It connects cleanly to Task 2~--- both projects are eviction
+        policies on bounded caches, at different layers of the stack.
+\end{itemize}
+
+\subsection{What we built}
+A single directory \texttt{task1-presentation/} with:
+\begin{itemize}[leftmargin=1.5em,itemsep=0.1em]
+  \item \textbf{The paper itself}~--- \texttt{papers/streaming-llm/} +
+        \texttt{deep-read.md} (page-by-page summary) +
+        \texttt{critical-analysis.md} (our critique).
+  \item \textbf{The deck}~--- \texttt{StreamingLLM\_Presentation.pptx},
+        \textbf{46 slides}, built programmatically by
+        \texttt{build\_streaming\_llm\_deck.py} so every slide is
+        version-controlled Python.
+  \item \textbf{Speaker notes}~--- \texttt{notes/speaker-notes.md},
+        $\sim$8{,}000 words, one section per slide, every numeric claim
+        tied to a page.
+  \item \textbf{Runnable demo}~--- \texttt{code/streaming\_llm\_demo.py},
+        $\sim$200 lines of PyTorch + Hugging Face, with
+        \texttt{SinkKVCache}/\texttt{WindowKVCache}/\texttt{DenseKVCache}
+        classes side by side + unit tests.
+  \item \textbf{Reference decks}~--- four prior course decks kept as
+        style references.
+\end{itemize}
+
+\subsection{How the deck is structured (60 minutes)}
+Twelve sections: Basics (5\,min) $\to$ Related work (5\,min) $\to$
+Observation (6\,min) $\to$ Mechanism (10\,min) $\to$ Sink-token
+pre-training (4\,min) $\to$ Results (12\,min) $\to$ Limits deep-dive
+(6\,min) $\to$ Modern alternatives (3\,min) $\to$ Implementation
+walkthrough (4\,min) $\to$ What I would change (2\,min) $\to$ Bridge to
+Task 2 (1\,min) $\to$ Q\&A prep.
+
+\subsection{The elevator pitch}
+\begin{quote}\itshape
+A 2024 ICLR paper explaining why language models fall apart on long
+conversations, and a small trick~--- always keep the first 4 tokens in
+the cache plus a rolling window of the last $L$~--- that fixes it. It's a
+cache eviction policy, which is why we picked it for a caching class.
+\end{quote}
+
+% =========================================================================
+\section{What GPTCache is (10 minutes)}
+% =========================================================================
+
+\subsection{The problem, in one sentence}
+Calling GPT-4 twice with \textbf{semantically equivalent} prompts costs
+twice as much and takes twice as long~--- even though the model would
+give roughly the same answer. GPTCache puts a \textbf{response cache} in
+front of the LLM so that ``similar enough'' prompts return the cached
+answer instead of hitting the paid API.
+
+\subsection{Where it lives}
+\begin{itemize}[leftmargin=1.5em,itemsep=0.1em]
+  \item Repository: \texttt{zilliztech/GPTCache} on GitHub. Company:
+        Zilliz (the people behind the Milvus vector database).
+  \item License: \textbf{Apache 2.0}.
+  \item Stars: $\sim$\textbf{12{,}000}.
+  \item First release: mid-2023, riding the wave of production LLM apps.
+  \item Language: Python.
+  \item Position in the stack: sits \emph{between your application and
+        the OpenAI/Anthropic/Hugging Face API}.
+\end{itemize}
+
+\subsection{How the caching works}
+Not a normal key-value cache~--- prompts are almost never exactly equal.
+Two things need to match:
+\begin{enumerate}[leftmargin=1.5em,itemsep=0.1em]
+  \item \textbf{The prompt has to be semantically similar} to a
+        previously cached prompt. GPTCache embeds the prompt into a
+        dense vector (via SentenceTransformers, OpenAI embeddings,
+        etc.), and looks up the nearest neighbours in a vector database
+        (FAISS, Milvus, ChromaDB, etc.).
+  \item \textbf{The cached answer has to still be valid.} Every entry
+        has metadata (model, temperature, system prompt) and only
+        matches with matching metadata are used.
+\end{enumerate}
+
+Three components you interact with:
+\begin{itemize}[leftmargin=1.5em,itemsep=0.1em]
+  \item \texttt{CacheBase}~--- where prompts and answers are stored
+        (SQLite, PostgreSQL, MongoDB\ldots).
+  \item \texttt{VectorBase}~--- where the embeddings are stored (FAISS,
+        Milvus, Chroma\ldots).
+  \item \texttt{EvictionBase}~--- the eviction policy for when the
+        caches get full. \textbf{This is where our contribution goes.}
+\end{itemize}
+
+\subsection{The eviction question}
+Before our change, \texttt{EvictionBase(name="memory", policy=P)}
+accepted four options for $P$:
+\begin{itemize}[leftmargin=1.5em,itemsep=0.1em]
+  \item \textbf{LRU} --- evict whichever entry hasn't been touched in the
+        longest time. (Default.)
+  \item \textbf{LFU} --- evict whichever entry has the smallest hit
+        count.
+  \item \textbf{FIFO} --- evict in insertion order.
+  \item \textbf{RR} --- evict a uniformly random entry.
+\end{itemize}
+
+These are the canonical page-cache policies from an operating systems
+textbook. They all share a problem for LLM traffic: they treat every
+cached entry as equally valuable. But regenerating one entry might cost
+20~cents (a long GPT-4 completion) and regenerating another might cost
+0.02~cents (a short GPT-3.5 answer). LRU has no way to know that. So on
+realistic LLM traffic, these policies \textbf{evict expensive answers as
+readily as cheap ones}, and every avoidable eviction of an expensive
+answer costs real money.
+
+\subsection{What GPTCache already did well, and what was missing}
+Already excellent: backend flexibility (swap SQLite for MongoDB
+transparently), similarity strategies (exact match, kNN, distance
+thresholds), and integrations with LangChain / LlamaIndex / OpenAI SDK.
+
+Missing: no cost-aware or size-aware eviction policy. Every option
+treats entries as fungible.
+
+Because \texttt{EvictionBase} is already a factory with a clean
+\texttt{policy=$\dots$} argument, adding a new policy is exactly the
+kind of contribution maintainers welcome. That's the surface where our
+GDSF policy plugs in.
+
+% =========================================================================
+\section{What we did for Task 2 (10 minutes)}
+% =========================================================================
+
+\subsection{The assignment}
+An open-source contribution + a research paper on a caching-in-LLMs
+topic. Deliverables: a real PR-ready contribution to an upstream repo,
+plus a 7-page ACM-\texttt{acmart} sigconf paper.
+
+\subsection{What we chose}
+Add a new eviction policy to GPTCache: \textbf{GDSF~---
+Greedy-Dual-Size-Frequency}. Written by Cao \& Irani (USITS 1997) and
+Cherkasova (HP~Labs 1998) for \textbf{web proxy caches} in the late
+1990s. A weighted-caching classic that has never been ported to LLM
+caches.
+
+\subsection{The GDSF idea, in one line}
+Assign each entry a \textbf{priority score} that folds in three signals:
+\[
+  \text{Priority}(i) \;=\; L \;+\; \frac{\mathrm{freq}(i)^{\alpha} \cdot \mathrm{cost}(i)^{\beta}}{\mathrm{size}(i)}
+\]
+\begin{itemize}[leftmargin=1.5em,itemsep=0.05em]
+  \item $\mathrm{freq}(i)$~--- request count. Rewards hot entries.
+  \item $\mathrm{cost}(i)$~--- generation cost. Rewards expensive
+        answers you don't want to regenerate.
+  \item $\mathrm{size}(i)$~--- storage size. Penalizes bloat.
+  \item $L$~--- a monotone ``clock'' that inflates on every eviction, so
+        recent entries stay competitive even before their frequency
+        rises. This is what keeps GDSF from getting stuck.
+  \item $\alpha, \beta$~--- exponents that tune frequency vs.\ cost.
+\end{itemize}
+Evict the entry with the \textbf{lowest priority}. Cao \& Irani proved
+this is competitively optimal (ratio $k$) for weighted online caching
+among deterministic algorithms.
+
+\subsection{What we built}
+\begin{itemize}[leftmargin=1.5em,itemsep=0.1em]
+  \item \textbf{Upstream contribution}~--- a real PR-ready branch on my
+        fork \texttt{nissimbrami/GPTCache}, ready to open against
+        \texttt{zilliztech/GPTCache}. 3 files, +389 lines.
+  \item \textbf{Research paper}~--- a 7-page ACM \texttt{acmart} sigconf
+        write-up in \texttt{task2-final-project/report-latex/report.pdf}.
+  \item \textbf{Plugin code}~---
+        \texttt{code/src/cost\_aware\_eviction/}, 1{,}060 lines. Heart
+        is \texttt{gdsf\_eviction.py}~--- an indexed min-heap with
+        $O(\log n)$ priority updates, thread-safe via a single
+        \texttt{RLock}.
+  \item \textbf{Test suite}~--- \textbf{259 tests}, 3{,}332 lines, all
+        passing. Cover factory wiring, backwards-compat API, cost-aware
+        ranking, size penalisation, clock monotonicity, tie-breaking,
+        input validation.
+  \item \textbf{Benchmark harness}~--- 6 workload generators, a runner,
+        metrics.
+  \item \textbf{Statistics script}~--- paired-t + Bonferroni + BCa
+        bootstrap analysis.
+\end{itemize}
+
+\subsection{The API design}
+Backwards compatible while adding new capability:
+\begin{itemize}[leftmargin=1.5em,itemsep=0.1em]
+  \item \texttt{EvictionBase("memory", policy="GDSF")}~--- factory
+        dispatches to the new class. Existing users unaffected.
+  \item \texttt{put(keys)}~--- still works. Defaults $\mathrm{cost}=1$,
+        $\mathrm{size}=1$, which reduces GDSF to LFU-with-clock-aging.
+  \item \texttt{put\_with\_metadata([(key, cost, size), $\dots$])}~---
+        the new extension. Unlocks the full cost-aware behaviour.
+\end{itemize}
+
+\subsection{The benchmark}
+\textbf{3{,}600 runs}: 30 seeds $\times$ 6 workloads $\times$ 4 cache
+sizes $\times$ 5 policies. Every run reports \textbf{CWHR}
+(cost-weighted hit rate) and \textbf{dollar spend}. Then paired-t +
+Bonferroni + 95\% BCa bootstrap CIs (10{,}000 resamples, seed pinned to
+\texttt{20260721}).
+
+\subsection{The results}
+
+\begin{center}
+\small
+\begin{tabular}{l r l r r}
+\toprule
+\textbf{Workload} & \textbf{$\Delta$ CWHR} & \textbf{95\% BCa CI} & \textbf{Bonf.\ $p$} & \textbf{Dollar $\Delta$} \\
+\midrule
+high-variance cost   & \textbf{+0.1190}   & [+0.102, +0.136]  & 8.6e-26 & \textbf{+25.7\%} \\
+bursty               & \textbf{+0.1626}   & [+0.150, +0.175]  & 5.9e-49 & \textbf{+32.3\%} \\
+size-varying         & \textbf{+0.1632}   & [+0.153, +0.173]  & 1.6e-58 & \textbf{+91.0\%} \\
+adversarial anti-LRU & \textbf{+0.1419}   & [+0.100, +0.189]  & 3.4e-8  & \textbf{+18.8\%} \\
+uniform cost         & +0.00003           & [$-$0.0004, +0.0005] & 1.00 & +0.005\% \\
+Zipf, fits in cache  & $-$0.0003          & [$-$0.0005, $-$0.0002] & 4.9e-4 & $-$0.037\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Read it this way: on the four workloads where a cost-aware policy
+\emph{should} help, GDSF wins by \textbf{18.8\%--91.0\% in dollar
+savings} vs LRU, with Bonferroni-corrected $p$ ranging from $10^{-8}$ to
+$10^{-58}$. On the two workloads where cost-awareness cannot help, GDSF
+is statistically indistinguishable from LRU~--- no meaningful
+regression.
+
+\subsection{The elevator pitch}
+\begin{quote}\itshape
+I ported GDSF~--- a classic weighted-caching policy from the 1990s for
+web proxies~--- into GPTCache, the $\sim$12{,}000-star Zilliz project
+that puts a semantic response cache in front of LLM APIs. On realistic
+LLM workloads where regeneration cost varies by 100$\times$ between
+entries, my policy saves up to \textbf{91\%} more money than the default
+LRU with $p < 10^{-58}$. Contribution is a PR-ready branch on
+\texttt{zilliztech/GPTCache}; the write-up is a 7-page ACM sigconf
+paper.
+\end{quote}
+
+% =========================================================================
+\section*{Cross-reference: how Task 1 and Task 2 relate}
+% =========================================================================
+Two caches, one idea:
+
+\begin{center}
+\small
+\begin{tabular}{p{2.4cm} p{5.2cm} p{5.5cm}}
+\toprule
+\textbf{Layer} & \textbf{Task 1 --- StreamingLLM} & \textbf{Task 2 --- GDSF on GPTCache} \\
+\midrule
+What is cached
+  & Key/Value vectors of past tokens
+  & Whole (prompt $\to$ response) pairs \\
+Where in the stack
+  & Inside the model, per attention layer
+  & In front of the model, at the API layer \\
+Capacity unit
+  & $S$ sinks + $L$ rolling tokens
+  & $N$ entries or $M$ bytes \\
+Eviction signal
+  & Position (first $S$ + last $L$)
+  & Frequency $\times$ cost / size + clock \\
+Failure mode when dumb
+  & PPL 5158 (softmax collapse)
+  & Overspend on regeneration \$\$\$ \\
+Fix
+  & Positional eviction rule
+  & Cost-aware eviction rule \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Both caches are bounded. Both suffer under naive eviction. Both admit a
+small, elegant policy fix that doesn't require retraining the model.
+That is the through-line for the whole project and it is what the last
+slide of the presentation says.
+
+\end{document}

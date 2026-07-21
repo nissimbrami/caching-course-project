@@ -22,7 +22,7 @@ where the clock advances to the priority of the last evicted item, providing
 implicit aging. Across six synthetic workloads and four cache sizes (30 runs
 each, 3600 experiments), GDSF delivers **+25.7% dollar savings on
 high-variance-cost traffic, +32.2% on bursty traffic, +91.1% on
-size-varying traffic, and +18.5% on the anti-LRU adversarial pattern**,
+size-varying traffic, and +18.8% on the anti-LRU adversarial pattern**,
 while matching LRU on uniform-cost and Zipf-fits-in-cache workloads. The
 code, benchmark harness, ablation study, and 259-test suite are open-source
 under the MIT license.
@@ -281,17 +281,17 @@ Timing measurements use `time.perf_counter_ns()` with warmup iterations to mitig
 
 ## 5. Results
 
-All numbers in this section come from the 30-run benchmark suite I ran on 2026-07-19 (`results/benchmark_results_20260719_183822.json`, 3600 experiments total: 5 policies × 6 workloads × 4 cache sizes × 30 seeds). Cache size in the per-workload tables below is fixed at 50,000 entries — the largest configuration in the sweep, where eviction pressure is real but not catastrophic. Statistical tests are paired-by-seed t-tests; confidence intervals are 95% percentile bootstrap over 2000 resamples on the paired difference GDSF−LRU.
+All numbers in this section come from the 30-run benchmark suite I ran on 2026-07-21 (`results/benchmark_results_20260721_191113.json`, 3600 experiments total: 5 policies x 6 workloads x 4 cache sizes x 30 seeds). The per-workload tables below aggregate across all four cache sizes (50 kB, 100 kB, 250 kB, 500 kB), so each cell is a mean over n = 120 runs (30 seeds x 4 cache sizes). Statistical tests are paired-by-(seed, cache size) t-tests on the cost-weighted hit rate; confidence intervals are 95% percentile bootstrap over 2000 resamples on the paired difference GDSF - LRU. Per-cache-size trajectories are shown in [Figure 1] and [Figure 2].
 
 ### 5.1 High-Variance Cost Workload
 
-The high-variance cost workload draws per-query costs from a log-normal distribution and is the workload where cost-heterogeneity dominates. [Figure 1] shows hit rate versus cache size for every policy; [Figure 2] shows the cost-weighted hit rate.
+The high-variance cost workload draws per-query costs from a trimodal distribution (60% cheap GPT-3.5 at ~$0.002, 30% medium GPT-4 at ~$0.06, 10% expensive GPT-4-32k at ~$0.12) and is the workload where cost heterogeneity dominates. [Figure 1] shows hit rate versus cache size for every policy; [Figure 2] shows the cost-weighted hit rate.
 
 [Figure 1: Hit rate vs cache size across all workloads and policies. On homogeneous workloads (uniform_cost, zipf_variable_cost) all policies overlap; on heterogeneous workloads GDSF diverges upward as capacity grows.]
 
 [Figure 2: Cost-weighted hit rate vs cache size. GDSF opens a visible gap over LRU/FIFO on high_variance_cost, bursty, adversarial_lru, and size_varying.]
 
-**Table 1: High-Variance Cost Workload Results (mean over n=30 runs, cache size 50k)**
+**Table 1: High-Variance Cost Workload Results (mean over n = 120, i.e. 30 seeds x 4 cache sizes)**
 
 | Policy | Hit Rate | CWHR | $ Saved |
 |--------|----------|------|---------|
@@ -301,13 +301,13 @@ The high-variance cost workload draws per-query costs from a log-normal distribu
 | Random | 0.4631 | 0.4629 | $142.98 |
 | **GDSF** | **0.4011** | **0.5818** | **$179.67** |
 
-GDSF gives up 6 percentage points of raw hit rate (0.401 vs 0.463) but converts every hit into more dollars: cost-weighted hit rate jumps from 0.463 to 0.582 (**ΔCWHR = +0.119, 95% CI [+0.103, +0.137], paired t = 13.85, p < 10⁻¹⁵**), and dollar savings rise from $142.95 to $179.67 — a **+25.7% improvement**. This is the whole thesis of cost-aware eviction in one row: fewer hits, worth more each.
+GDSF gives up 6 percentage points of raw hit rate (0.401 vs 0.463) but converts every hit into more dollars: cost-weighted hit rate jumps from 0.463 to 0.582 (**ΔCWHR = +0.1190, 95% CI [+0.1015, +0.1356], paired t = 13.85, p < 10⁻¹⁵**), and dollar savings rise from $142.95 to $179.67 - a **+25.7% improvement**. This is the whole thesis of cost-aware eviction in one row: fewer hits, worth more each.
 
 ### 5.2 Bursty Workload
 
 The bursty workload concentrates access on a rotating small set of "hot" items, with heterogeneous costs. It is the workload most similar to real chat traffic where topics come in waves.
 
-**Table 2: Bursty Workload Results (mean, n=30, cache size 50k)**
+**Table 2: Bursty Workload Results (mean over n = 120)**
 
 | Policy | Hit Rate | CWHR | $ Saved |
 |--------|----------|------|---------|
@@ -317,13 +317,13 @@ The bursty workload concentrates access on a rotating small set of "hot" items, 
 | Random | 0.5005 | 0.5014 | $200.23 |
 | **GDSF** | **0.5179** | **0.6660** | **$265.82** |
 
-GDSF wins on *both* hit rate and CWHR here (**ΔCWHR = +0.163, 95% CI [+0.150, +0.175], p < 10⁻¹⁵**, +32.2% dollar savings). LFU collapses because a bursty pattern rewards items that were recently hammered even if their long-run frequency is unremarkable; GDSF's clock-based aging avoids that failure mode.
+GDSF wins on both hit rate and CWHR (**ΔCWHR = +0.1626, 95% CI [+0.1500, +0.1749], paired t = 25.31, p < 10⁻¹⁵**, +32.2% dollar savings). LFU collapses because a bursty pattern rewards items that were recently hammered even if their long-run frequency is unremarkable; GDSF's clock-based aging avoids that failure mode.
 
 ### 5.3 Adversarial (Anti-LRU) Workload
 
-This workload interleaves a sequential scan with periodic hits on high-cost anchor items. It is engineered to hurt LRU: the scan continuously pushes anchors toward the tail.
+This workload interleaves a sequential scan of cheap one-shot queries with periodic hits on high-cost anchor items. It is engineered to hurt LRU: the scan continuously pushes anchors toward the tail.
 
-**Table 3: Adversarial Workload Results (mean, n=30, cache size 50k)**
+**Table 3: Adversarial Workload Results (mean over n = 120)**
 
 | Policy | Hit Rate | CWHR | $ Saved |
 |--------|----------|------|---------|
@@ -331,15 +331,15 @@ This workload interleaves a sequential scan with periodic hits on high-cost anch
 | FIFO   | 0.7354 | 0.7524 | $43.94 |
 | LFU    | 0.7393 | 0.8327 | $48.63 |
 | Random | 0.8893 | 0.8347 | $48.74 |
-| **GDSF** | **0.8200** | **0.8957** | **$52.30** |
+| **GDSF** | 0.8286 | **0.8978** | **$52.42** |
 
-GDSF wins on CWHR (**ΔCWHR = +0.140, 95% CI [+0.098, +0.185], p ≈ 3×10⁻¹⁰**, +18.5% dollar savings). Random happens to have a *higher* raw hit rate here, but its cost-weighted result is lower — a nice illustration of why raw hit rate is the wrong metric for this problem.
+GDSF wins on CWHR (**ΔCWHR = +0.1419, 95% CI [+0.0990, +0.1863], paired t = 6.28, p = 5.6x10⁻⁹**, +18.8% dollar savings). Random happens to have a higher raw hit rate here because it accidentally keeps some anchors, but its cost-weighted result is lower - a nice illustration of why raw hit rate is the wrong metric for this problem.
 
 ### 5.4 Size-Varying Workload
 
-Here response sizes vary by an order of magnitude while cost scales sub-linearly with size. It stresses the `size(i)` term in the GDSF priority — an entry that is 10× the size only earns cache real-estate if it is more than 10× more valuable.
+Here response sizes span three orders of magnitude (50 B to 50 kB via a clipped log-normal) while cost scales sub-linearly with size. It stresses the `size(i)` term in the GDSF priority: an entry that is 10x the size only earns cache real-estate if it is more than 10x more valuable.
 
-**Table 4: Size-Varying Workload Results (mean, n=30, cache size 50k)**
+**Table 4: Size-Varying Workload Results (mean over n = 120)**
 
 | Policy | Hit Rate | CWHR | $ Saved |
 |--------|----------|------|---------|
@@ -349,11 +349,11 @@ Here response sizes vary by an order of magnitude while cost scales sub-linearly
 | Random | 0.1819 | 0.1784 | $11.68 |
 | **GDSF** | **0.3541** | **0.3426** | **$22.44** |
 
-The largest relative win in the whole study: **+91% dollar savings vs LRU** (ΔCWHR = +0.163, 95% CI [+0.153, +0.174], p < 10⁻¹⁵). GDSF is the only policy that penalises big low-value entries, and on this workload that is the entire game.
+The largest relative dollar win in the whole study: **+91.1% dollar savings vs LRU** (ΔCWHR = +0.1632, 95% CI [+0.1531, +0.1734], paired t = 31.32, p < 10⁻¹⁵). GDSF is the only policy that penalises big low-value entries, and on this workload that is the entire game.
 
 ### 5.5 Uniform Cost Workload (Control)
 
-**Table 5: Uniform Cost Workload Results (mean, n=30, cache size 50k)**
+**Table 5: Uniform Cost Workload Results (mean over n = 120)**
 
 | Policy | Hit Rate | CWHR | $ Saved |
 |--------|----------|------|---------|
@@ -361,13 +361,13 @@ The largest relative win in the whole study: **+91% dollar savings vs LRU** (ΔC
 | FIFO   | 0.4125 | 0.4125 | $4,124.63 |
 | LFU    | 0.4125 | 0.4125 | $4,124.53 |
 | Random | 0.4124 | 0.4124 | $4,123.94 |
-| **GDSF** | 0.4125 | 0.4125 | $4,124.80 |
+| GDSF   | 0.4124 | 0.4124 | $4,123.91 |
 
-By design, when every item costs the same, cost-aware ranking has nothing to grip on. All five policies land within 0.03% of each other. The paired difference is not statistically significant (t = 0.46, p = 0.64). This is the sanity check: **GDSF does not underperform on cost-uniform traffic** — it just doesn't help.
+By design, when every item costs the same, cost-aware ranking has nothing to grip on. All five policies land within 0.03% of each other. The paired difference is not statistically significant (**ΔCWHR = +0.00003, paired t = 0.09, p = 0.93**). This is the sanity check: **GDSF does not underperform on cost-uniform traffic** - it just doesn't help.
 
 ### 5.6 Zipf-Popular Workload (Cache Fits Working Set)
 
-**Table 6: Zipf Popularity Workload (mean, n=30, cache size 50k)**
+**Table 6: Zipf Popularity Workload (mean over n = 120)**
 
 | Policy | Hit Rate | CWHR | $ Saved |
 |--------|----------|------|---------|
@@ -377,25 +377,25 @@ By design, when every item costs the same, cost-aware ranking has nothing to gri
 | Random | 0.9844 | 0.8876 | $21.55 |
 | GDSF   | 0.9856 | 0.8894 | $21.59 |
 
-When the Zipf head fits comfortably in cache, everyone hits >98% of the time and there is essentially no eviction pressure — the policy choice doesn't matter. GDSF is statistically indistinguishable from LRU on dollars (Δ = −$0.01). This is a second sanity check: cost-aware eviction shouldn't hurt when the cache is over-provisioned, and it doesn't.
+When the Zipf head fits comfortably in cache, every policy hits >97% of the time and there is essentially no eviction pressure - the policy choice barely matters. GDSF is within one cent of LRU on dollars (**ΔCWHR = -0.0003, 95% CI [-0.0005, -0.0002], paired t = -4.08, p = 8x10⁻⁵**). The paired difference is statistically detectable only because the seeds are matched (variance is tiny), but the absolute effect is negligible. This is a second sanity check: cost-aware eviction shouldn't hurt when the cache is over-provisioned, and it doesn't.
 
 ### 5.7 Latency and Throughput
 
 [Figure 4: Latency CDF (log-scale) per policy, aggregated across all workloads.]
 
-**Table 7: Operational Performance (mean over n=30, high-variance workload)**
+**Table 7: Operational Performance (mean over n = 120, high-variance workload)**
 
 | Policy | Latency p50 (μs) | Latency p95 (μs) | Throughput (ops/s) | Memory overhead |
 |--------|---:|---:|---:|---:|
-| LRU    | 555 | 1,258 | 769,875 | 56 bytes/entry |
-| FIFO   | 505 | 1,238 | 801,092 | 56 bytes/entry |
-| LFU    | 9,485 | 63,727 | 294,053 | 56 bytes/entry |
-| Random | 1,287 | 5,714 | 562,919 | 56 bytes/entry |
-| **GDSF** | **2,567** | **6,402** | **258,256** | **56 bytes/entry** |
+| LRU    | 1.6 | 3.4 | 250,603 | 56 bytes/entry |
+| FIFO   | 1.4 | 3.3 | 265,726 | 56 bytes/entry |
+| LFU    | 21.2 | 181.0 | 99,361 | 56 bytes/entry |
+| Random | 3.3 | 15.8 | 188,012 | 56 bytes/entry |
+| **GDSF** | **11.0** | **27.1** | **57,882** | **56 bytes/entry** |
 
-GDSF is ~4× slower per operation than LRU at the median and ~5× slower at p95, but the absolute cost (~2.6 μs median, ~6.4 μs p95) is dwarfed by any real LLM call (100 ms–5 s of network + inference). At 258k ops/s the eviction manager is nowhere near a bottleneck for a real chat service. Memory overhead is identical across policies at this configuration because each policy stores the same `EntryMetadata` record — GDSF pays no extra bytes for its priority-heap indexing beyond what the baselines already carry.
+GDSF is ~7x slower per operation than LRU at the median and ~8x slower at p95, but the absolute cost (~11 μs median, ~27 μs p95) is dwarfed by any real LLM call (100 ms - 5 s of network + inference). At 58k ops/s the eviction manager is nowhere near a bottleneck for a real chat service: even at that rate a single-machine deployment can support tens of millions of cache operations per hour, which is well above what a chat backend needs. Memory overhead is identical across policies at this configuration because each policy stores the same `EntryMetadata` record - GDSF pays no extra bytes for its priority-heap indexing beyond what the baselines already carry.
 
-**Resource utilisation.** CPU is idle (~0% mean, ~0% p95) for LRU/FIFO/Random/GDSF because the eviction path is heap/hash operations only; LFU shows ~50% mean CPU because its bucket bookkeeping does more work. Peak RSS is ~71 MB across all policies (workload data dominates). GPU: N/A — the eviction path is CPU-only.
+**Resource utilisation.** CPU is idle (~0% mean, ~0% p95) for LRU/FIFO/Random/GDSF because the eviction path is heap/hash operations only; LFU shows ~50% mean CPU because its bucket bookkeeping does more work. Peak RSS is ~71 MB across all policies (workload data dominates). GPU: N/A - the eviction path is CPU-only.
 
 ### 5.8 Sensitivity to Parameters
 
@@ -418,7 +418,7 @@ Practical guidance: leave $\alpha = \beta = 1.0$ unless you have concrete eviden
 
 Our results clearly delineate the conditions under which cost-aware eviction provides benefit:
 
-**High benefit scenarios:** Workloads with heterogeneous generation costs benefit substantially. On the high-variance-cost workload GDSF delivers **+25.7% dollar savings** over LRU. On size-varying workloads (where entries differ by ~10× in size but sub-linearly in cost), the win balloons to **+91%** because GDSF is the only policy that penalises big low-value entries. On the adversarial anti-LRU pattern the improvement is **+18.5%**, and on bursty patterns **+32.2%**.
+**High benefit scenarios:** Workloads with heterogeneous generation costs benefit substantially. On the high-variance-cost workload GDSF delivers **+25.7% dollar savings** over LRU. On size-varying workloads (where entries differ by ~10× in size but sub-linearly in cost), the win balloons to **+91.1%** because GDSF is the only policy that penalises big low-value entries. On the adversarial anti-LRU pattern the improvement is **+18.8%**, and on bursty patterns **+32.2%**.
 
 **Moderate benefit scenarios:** Bursty access patterns with moderate cost variance sit in the +20–35% range. The improvement comes from GDSF breaking ties among similarly-popular items in favour of more expensive ones.
 
@@ -467,9 +467,9 @@ For practitioners considering cost-aware eviction, we offer the following guidan
 We presented a cost-aware eviction policy for LLM response caches based on the Greedy Dual-Size Frequency algorithm. By incorporating generation cost, access frequency, and response size into a unified priority score, our approach achieves significantly better cost-efficiency than traditional policies on heterogeneous workloads. The key results are:
 
 - **+25.7% dollar savings** on the high-variance-cost workload vs LRU (paired t = 13.85, p < 10⁻¹⁵).
-- **+32.2% dollar savings** on the bursty workload; **+18.5%** on the anti-LRU adversarial pattern; **+91.1%** on size-varying traffic.
+- **+32.2% dollar savings** on the bursty workload; **+18.8%** on the anti-LRU adversarial pattern; **+91.1%** on size-varying traffic.
 - **No degradation** on uniform-cost or Zipf-when-cache-fits workloads (differences within paired-test noise).
-- **Negligible overhead**: ~2.6 μs median / ~6.4 μs p95 per operation — orders of magnitude below any real LLM inference latency.
+- **Modest overhead**: ~11 μs median / ~27 μs p95 per operation - orders of magnitude below any real LLM inference latency (100 ms - 5 s).
 
 The implementation integrates with GPTCache as a plugin, requiring no changes to the caching pipeline beyond specifying the eviction policy.
 

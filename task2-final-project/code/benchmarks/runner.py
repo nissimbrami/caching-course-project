@@ -126,7 +126,7 @@ def run_all_experiments(
         otherwise a list of BenchmarkResult dicts.
     """
     if cache_sizes is None:
-        cache_sizes = [100, 500, 1000, 5000]
+        cache_sizes = [50000, 100000, 250000, 500000]
 
     if policy_names is None:
         policy_names = list(POLICY_REGISTRY.keys())

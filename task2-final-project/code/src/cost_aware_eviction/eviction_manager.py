@@ -114,6 +114,9 @@ class GDSFEvictionManager:
             if key in self._metadata:
                 meta = self._metadata[key]
                 old_size = meta["size"]
+                # If the new size would exceed capacity even alone, reject.
+                if size > self._config.max_size:
+                    return []
                 meta["freq"] += 1
                 meta["cost"] = cost
                 meta["size"] = size
@@ -123,7 +126,15 @@ class GDSFEvictionManager:
                     meta["freq"], meta["cost"], meta["size"]
                 )
                 self._heap.update(key, new_priority)
-                return []
+                # If the size grew and now exceeds capacity, evict others
+                # (never the key we just updated) until we fit.
+                evicted: List[Any] = []
+                while self._current_size > self._config.max_size and len(self._heap) > 1:
+                    victim = self._evict_one_excluding(key)
+                    if victim is None:
+                        break
+                    evicted.append(victim)
+                return evicted
 
             # If item is larger than total cache capacity, reject it
             if size > self._config.max_size:
@@ -246,3 +257,33 @@ class GDSFEvictionManager:
         meta = self._metadata.pop(key)
         self._current_size -= meta["size"]
         return key
+
+    def _evict_one_excluding(self, protected_key: Any) -> Optional[Any]:
+        """Evict the lowest-priority item that is not `protected_key`.
+
+        Used when a duplicate put grows an existing entry past capacity: we
+        must never evict the entry we just updated, since the caller is
+        currently writing it.
+        """
+        stashed: List = []
+        try:
+            while len(self._heap) > 0:
+                key, priority = self._heap.pop()
+                if key == protected_key:
+                    stashed.append((key, priority))
+                    continue
+                self._clock = priority
+                meta = self._metadata.pop(key)
+                self._current_size -= meta["size"]
+                # Restore stashed items
+                for k, p in stashed:
+                    self._heap.push(k, p)
+                return key
+            # Only the protected key was in the heap
+            for k, p in stashed:
+                self._heap.push(k, p)
+            return None
+        except Exception:
+            for k, p in stashed:
+                self._heap.push(k, p)
+            raise

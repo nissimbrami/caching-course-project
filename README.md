@@ -11,12 +11,12 @@ Two deliverables:
 - Contribution: cost-aware **GDSF** eviction as a drop-in
   `EvictionBase` plugin for [zilliztech/GPTCache](https://github.com/zilliztech/GPTCache).
 - Code, tests, benchmarks: [`task2-final-project/code/`](task2-final-project/code/)
-  (259 tests, 30-seed benchmark, α×β ablation).
+  (300 tests, 30-seed benchmark, α×β ablation).
 - **Report (canonical, ACM `acmart` sigconf, 8 pages, pdfLaTeX):**
   [`task2-final-project/report-latex/report.pdf`](task2-final-project/report-latex/report.pdf).
   Source: [`report.tex`](task2-final-project/report-latex/report.tex) +
   [`references.bib`](task2-final-project/report-latex/references.bib).
-  Overleaf import: [`overleaf-project.zip`](task2-final-project/report-latex/overleaf-project.zip).
+  An Overleaf import zip can be produced on demand from the `report-latex/` sources.
 
 ## Headline results (paired-t, Bonferroni across 6 workloads, 95% BCa 10k bootstrap)
 | Workload            | ΔCWHR (GDSF−LRU) | 95% BCa CI          | paired-t | p_Bonferroni       | $ Δ vs LRU |
@@ -36,7 +36,7 @@ All numbers resolve to keys in `task2-final-project/code/results/stats_20260721_
 git clone https://github.com/nissimbrami/caching-course-project
 cd caching-course-project/task2-final-project/code
 pip install -r requirements.txt && pip install -e .
-pytest -q                                          # 259 tests
+pytest -q                                          # 300 tests
 python -m benchmarks.run_all --n-runs 30           # 3,600 experiments
 python scripts/compute_statistics.py               # stats JSON
 python scripts/run_ablation.py --num-runs 30       # α×β grid
@@ -48,4 +48,4 @@ The LaTeX PDF is auto-built on every push by
 (TeX Live in a container) — downloadable as the `report-pdf` artifact.
 
 ## Licence
-MIT (code) — see [`task2-final-project/code/LICENSE`](task2-final-project/code/LICENSE).
+MIT (code).

@@ -54,8 +54,8 @@ What the script actually does, stage by stage:
 | 4 | LRU vs GDSF on a small workload | `LRU cwhr=0.261` vs `GDSF cwhr=0.481` (GDSF ~2× better on cost-weighted metric) |
 | 5 | Statistics in the paper reproduce from JSON | `mean_diff = 0.118999`, `paired_t = 13.85`, `p_bonferroni = 8.600e-26`, `BCa CI = [0.102430, 0.135792]` — matches report exactly |
 | 6 | 300/300 unit tests pass | `============ 300 passed in ~43s =============` |
-| 7 | Compiled report PDF exists | `pages = 9   bytes = 740938` |
-| 8 | Result artefacts present | 1 benchmark JSON + 1 stats JSON + 2 ablation CSVs + 8 PNGs on disk (4 embedded in report) |
+| 7 | Compiled report PDF exists | `pages = 8   bytes = 669656` |
+| 8 | Result artefacts present | 1 benchmark JSON + 1 stats JSON + 2 ablation CSVs + 4 PNGs on disk (all 4 embedded in report) |
 
 ---
 
@@ -166,7 +166,7 @@ ls -l ../report-latex/report.pdf
 pdfinfo ../report-latex/report.pdf | grep -E "Pages|Page size"
 ```
 
-Expected: 9 pages, ~741 KB.
+Expected: 8 pages, ~654 KB.
 
 ---
 
@@ -189,7 +189,7 @@ Stages executed:
 2. Full benchmark grid: 5 policies × 6 workloads × 4 cache sizes × 30 seeds = 3600 rows
 3. `compute_statistics.py` → paired-t, Bonferroni, BCa 10 000-resample bootstrap
 4. Ablation sweep α × β = 6 × 6 = 36 config × 10 runs
-5. `generate_plots.py` → 8 figures generated; 4 figures included (Figs 2, 3, 5, 8 — renumbered as 1-4 in the report) after quality review (PNG + PDF). Figs 1, 4, 6, 7 removed from report — data quality issue.
+5. `generate_plots.py` → 4 figures generated (fig2/3/5/8, renumbered as 1-4 in the report) after quality review (PNG + PDF). Figs 1, 4, 6, 7 removed from report and from disk — data quality issue.
 6. `pdflatex report.tex` (if pdflatex installed)
 
 Outputs:
@@ -197,23 +197,20 @@ Outputs:
 - `results/benchmark_results_*.json` — raw 3600-row grid
 - `results/stats_*.json` — hypothesis-test results
 - `results/ablation/ablation_results.csv`, `ablation_results_raw.csv`
-- `results/plots/fig1..fig8_*.png|pdf` (8 figures generated; 4 figures included in report — Figs 2, 3, 5, 8, renumbered as 1-4 in the report — after quality review; Figs 1, 4, 6, 7 removed from report — data quality issue)
+- `results/plots/fig{2,3,5,8}_*.png|pdf` (4 figures generated, all embedded in report as Figs 1-4 after renumbering; Figs 1, 4, 6, 7 removed from report and from disk — data quality issue)
 - `../report-latex/report.pdf`
 
 ---
 
 ## 4. Known non-blocking observations
 
-- **Fig 4 (latency CDF)** and **Fig 6 (workload sensitivity)** have latent
-  script bugs in `generate_plots.py` (large xlim + subplot indexing). PNG
-  copies on disk were rendered in the previous full run and are valid; a
-  fresh full re-run may fail to overwrite these two. **Both figures have
-  been removed from the report (data quality issue); only Figs 2, 3, 5, 8
-  are embedded (renumbered as 1-4 in the final report).** This does not
+- **Fig 4 (latency CDF)** and **Fig 6 (workload sensitivity)** had latent
+  script bugs in `generate_plots.py` (large xlim + subplot indexing).
+  Along with Figs 1 and 7, they have been removed from the report
+  (data quality issue) and their PNG/PDF files have been deleted from
+  `results/plots/`. Only the 4 embedded figures (Figs 2, 3, 5, 8 —
+  renumbered as 1-4 in the final report) remain on disk. This does not
   affect any headline numbers.
-- Optional cleanup (not required for correctness):
-  - Add `.hypothesis/` to `.gitignore`.
-  - Remove `results/archive/` and `results/.smoke/` before final commit.
 
 ---
 
@@ -224,7 +221,7 @@ You have verified Task 2 end-to-end when all of these are true:
 - [ ] `bash scripts/run_live_smoke.sh` prints `[OK] All stages passed.`
 - [ ] Section 2.6 output matches `0.118999 / 13.85 / 8.60e-26 / [0.102430, 0.135792]`
 - [ ] Section 2.7 shows `300 passed` for every seed
-- [ ] `../report-latex/report.pdf` exists at 9 pages / ~741 KB
+- [ ] `../report-latex/report.pdf` exists at 8 pages / ~654 KB
 
 If all four pass, the report's numerical claims are reproducible from the
 code in this directory — which is the deliverable Prof. Einziger asks for
@@ -234,26 +231,27 @@ in `INSTRUCTIONS.md §1, §6, §9 Stage 7`.
 
 ## 6. Note on figures removed from report
 
-`generate_plots.py` produces 8 PNG/PDF figures on disk in `results/plots/`.
-The smoke test's Stage 8 artefact inventory (see `run_live_smoke.sh` line
-193-194) globs `results/plots/*.png` and passes as long as those PNG files
-exist — which they do. However, only 4 of the 8 figures are embedded in
-the final `report.pdf` after quality review:
+`generate_plots.py` originally produced 8 PNG/PDF figures. After quality
+review, 4 were dropped from the report **and deleted from disk**; only
+the 4 shipped figures remain in `results/plots/`. The smoke test's
+Stage 8 artefact inventory (see `run_live_smoke.sh` line 193-194) globs
+`results/plots/*.png` and passes as long as those PNG files exist —
+which they do (all 4 of them).
 
-- **Embedded**: Fig 2, Fig 3, Fig 5, Fig 8
-- **Dropped from report** (files remain on disk):
-  - **Fig 1** — shows raw hit rate, which is intentionally lower for GDSF
+- **Embedded in report** (present on disk): Fig 2, Fig 3, Fig 5, Fig 8
+- **Dropped from report and deleted from disk** (2026-08-08):
+  - **Fig 1** — showed raw hit rate, which is intentionally lower for GDSF
     (GDSF trades raw hits for cost-weighted hits). Displaying it without
     the accompanying CWHR context is misleading to a casual reader.
-  - **Fig 4** — latency CDF has a units/xlim overflow bug in
-    `generate_plots.py:337`; on-disk PNG is a stale render from Jul 21
-    and does not reflect the current axis range. Not report-quality.
-  - **Fig 6** — workload sensitivity subplot indexing bug in
-    `generate_plots.py`; on-disk PNG is a stale render from a superseded
-    experiment configuration. Not report-quality.
+  - **Fig 4** — latency CDF had a units/xlim overflow bug in
+    `generate_plots.py:337`; the on-disk PNG was a stale render from
+    Jul 21 and did not reflect the current axis range. Not report-quality.
+  - **Fig 6** — workload sensitivity had a subplot indexing bug in
+    `generate_plots.py`; the on-disk PNG was a stale render from a
+    superseded experiment configuration. Not report-quality.
   - **Fig 7** — memory usage metric is effectively constant across
     policies (all policies use the same cache size cap), so the figure
-    conveys no comparative information.
+    conveyed no comparative information.
 
-All 8 PNGs remain present in `results/plots/` for archival and audit
+All 4 shipped PNGs remain in `results/plots/` for archival and audit
 purposes. The `run_live_smoke.sh` PNG count check is unaffected.

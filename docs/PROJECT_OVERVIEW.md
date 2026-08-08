@@ -388,7 +388,7 @@ Plus a substantial amount of supporting code:
   (O(log n) priority updates) with a single `Lock` for thread
   safety. Wired into GPTCache's `EvictionBase` factory as
   `policy="GDSF"`.
-- `task2-final-project/code/tests/` — **259 unit tests**, 3,332 lines,
+- `task2-final-project/code/tests/` — **300 unit tests**,
   all passing. Cover factory wiring, backwards-compat API,
   cost-aware ranking, size penalization, clock monotonicity,
   tie-breaking, input validation.
@@ -458,9 +458,9 @@ Branch `feat/gdsf-cost-aware-eviction` on my fork
   through the factory).
 - `tests/unit_tests/manager/test_gdsf_eviction.py` (new — 8 unit tests).
 
-Draft body of the PR is in
-`task2-final-project/GPTCACHE_PR.md`. The PR itself is a single-click
-away.
+Opening the upstream PR against `zilliztech/GPTCache` was scoped as
+future work; the branch is prepared and ready but the PR submission
+itself is out of scope for this deliverable.
 
 ### 4.9 One thing to be able to say out loud
 
@@ -504,4 +504,3 @@ last slide of the presentation says.
 - **Slide-by-slide speaker notes:** `task1-presentation/notes/speaker-notes.md`
 - **The GDSF plugin itself:** `task2-final-project/code/src/cost_aware_eviction/eviction_manager.py`
 - **The research paper PDF:** `task2-final-project/report-latex/report.pdf`
-- **The upstream PR draft:** `task2-final-project/GPTCACHE_PR.md`

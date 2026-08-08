@@ -36,9 +36,11 @@ python -m venv .venv
 source .venv/bin/activate   # or .venv\Scripts\activate on Windows
 pip install -r requirements.txt
 pip install -e .
-make test          # 259 tests, ~2s
-make benchmark     # full suite, ~10-30 min
-make plots         # regenerate the 8 figures
+python -m pytest tests/ -q                # 300 tests, ~15s
+python -m benchmarks.run_all --n-runs 30  # full suite, ~10-30 min
+python scripts/generate_plots.py          # regenerate the 4 report figures
+bash scripts/run_live_smoke.sh            # ~2 min end-to-end verification
+python debug_playground.py                # 4-section interactive walk-through
 ```
 
 ## The enhancement in one formula
@@ -74,20 +76,21 @@ Eviction picks the entry with the smallest priority — an
 │   ├── policies.py              # LRU / FIFO / LFU / Random / GDSF wrappers
 │   ├── workloads.py             # 6 synthetic workloads
 │   └── metrics.py               # BenchmarkResult, MetricsCollector, ResourceSampler
-├── tests/                       # 259 tests: unit + integration + property (Hypothesis)
+├── tests/                       # 300 tests: unit + integration + property (Hypothesis)
 ├── scripts/
 │   ├── run_all.sh               # one-command reproduction
+│   ├── run_live_smoke.sh        # ~2-minute end-to-end smoke test
 │   ├── run_ablation.py          # α × β parameter sweep
-│   └── generate_plots.py        # figures 1–8
+│   ├── compute_statistics.py    # paired-t + Bonferroni + BCa bootstrap
+│   └── generate_plots.py        # regenerates the 4 report figures
 ├── results/                     # CSV/JSON output + plots + ablation
-├── docs/
-│   ├── library-justification.md # why GPTCache
-│   └── report.pdf               # the 8–12 page report
+├── debug_playground.py          # 4-section interactive walk-through
 ├── Dockerfile
 ├── docker-compose.yml
-├── Makefile
 └── pyproject.toml
 ```
+
+The report itself lives at `../report-latex/report.pdf`.
 
 ## What I measure
 
@@ -95,7 +98,7 @@ Per policy × workload × cache size × run (30 runs per config, seeds pinned):
 
 - **Hit rate** and **cost-weighted hit rate (CWHR)**
 - **Dollar savings** (sum of costs of served hits)
-- **Latency** — p50, p95, p99 in milliseconds
+- **Latency** — p50, p95, p99 in microseconds (µs)
 - **Throughput** — queries / second
 - **CPU%** — mean and p95 process CPU utilization (via `psutil`, sampled every 50 ms)
 - **RSS** — mean and peak resident-set-size in MB
@@ -108,8 +111,11 @@ with paired t-tests + Bonferroni correction and BCa bootstrap 95 % CIs.
 ## Reproducing the report numbers
 
 ```bash
-make all           # lint + test + benchmark + plots
+python -m pytest tests/ -q                # 300 tests
+python -m benchmarks.run_all --n-runs 30  # 3600-row benchmark grid
+python scripts/compute_statistics.py      # paired-t + BCa
 python scripts/run_ablation.py --num-runs 10
+python scripts/generate_plots.py          # regenerate the 4 report figures
 ```
 
 Base seed is `42`; run `i` uses `42 + i`. On a laptop-class CPU the full sweep
@@ -133,4 +139,4 @@ Available workloads: `uniform_cost`, `high_variance_cost`, `zipf_variable_cost`,
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. Free for academic and personal use.

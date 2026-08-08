@@ -93,6 +93,7 @@ class GDSFEvictionPlugin(EvictionBase):
         metadata_callback: Optional[Callable[[Any], tuple]] = None,
         default_entry_size: int = 1024,
         default_entry_cost: float = 0.001,
+        on_evict: Optional[Callable[[List[Any]], None]] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the GDSF eviction plugin.
@@ -108,6 +109,10 @@ class GDSFEvictionPlugin(EvictionBase):
             default_entry_size: Default entry size in bytes when metadata is
                 unavailable.
             default_entry_cost: Default entry cost when metadata is unavailable.
+            on_evict: Optional callback fired with a list of evicted keys when
+                GDSF evicts entries during put(). Used by GPTCache's
+                SSDataManager to clean up the underlying storage. Matches the
+                on_evict signature of gptcache.manager.eviction.memory_cache.
             **kwargs: Additional keyword arguments (for GPTCache compatibility).
         """
         # Accept legacy 'max_size' spelling for backwards compat
@@ -121,6 +126,7 @@ class GDSFEvictionPlugin(EvictionBase):
         self._metadata_callback = metadata_callback
         self._default_entry_size = default_entry_size
         self._default_entry_cost = default_entry_cost
+        self._on_evict = on_evict
         self._pending_metadata: Dict[Any, Dict[str, Any]] = {}
         self._eviction_queue: List[Any] = []
 
@@ -210,11 +216,20 @@ class GDSFEvictionPlugin(EvictionBase):
                 "objs must be List[Any], not str; got a str which would be "
                 "iterated character-by-character. Wrap single keys in a list."
             )
+        evicted_this_call: List[Any] = []
         for key in objs:
             size, cost = self._get_metadata(key)
             evicted = self._manager.put(key, size, cost)
             # Store evicted keys for retrieval via get()
             self._eviction_queue.extend(evicted)
+            evicted_this_call.extend(evicted)
+        # Fire the GPTCache-style on_evict callback so SSDataManager can
+        # purge the underlying storage. Only if the caller wired one in.
+        if self._on_evict is not None and evicted_this_call:
+            try:
+                self._on_evict(evicted_this_call)
+            except Exception as e:
+                logger.warning(f"on_evict callback failed: {e}")
 
     def next_victim(self, obj: Any = None) -> Any:
         """Return the next key to evict (renamed from get() to avoid

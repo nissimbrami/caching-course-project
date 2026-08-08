@@ -40,7 +40,7 @@ python -m pytest tests/ -q                # 300 tests, ~15s
 python -m benchmarks.run_all --n-runs 30  # full suite, ~10-30 min
 python scripts/generate_plots.py          # regenerate the 4 report figures
 bash scripts/run_live_smoke.sh            # ~2 min end-to-end verification
-python debug_playground.py                # 4-section interactive walk-through
+python debug_playground.py                # 6-lesson interactive tutorial (Lesson 6 = real GPTCache mode: plugin wired into SSDataManager with live SQLite+FAISS backends; needs `pip install sqlalchemy faiss-cpu`)
 ```
 
 ## The enhancement in one formula
@@ -84,7 +84,7 @@ Eviction picks the entry with the smallest priority — an
 │   ├── compute_statistics.py    # paired-t + Bonferroni + BCa bootstrap
 │   └── generate_plots.py        # regenerates the 4 report figures
 ├── results/                     # CSV/JSON output + plots + ablation
-├── debug_playground.py          # 4-section interactive walk-through
+├── debug_playground.py          # 6-lesson interactive tutorial (incl. real GPTCache integration)
 ├── Dockerfile
 ├── docker-compose.yml
 └── pyproject.toml

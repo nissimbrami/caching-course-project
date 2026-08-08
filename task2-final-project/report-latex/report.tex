@@ -819,192 +819,6 @@ Practical guidance: leave $\alpha = \beta = 1.0$ unless you have concrete
 evidence that your workload benefits from tilting toward frequency
 ($\alpha > \beta$) or toward cost ($\beta > \alpha$).
 
-\iffalse  % Sections below are pending H1..H7 and are excluded from this submission.
-%% ============================================================================
-\section{Real-Trace Evaluation}
-\label{sec:realtrace}
-
-\textbf{[NOTE: this section pending H1 (LMSys ingestion), H2 (ShareGPT
-ingestion), and H3 (replay methodology) completion. Figures
-\texttt{fig\_master\_1} and \texttt{fig\_master\_2} are not yet produced
-in \texttt{results/plots\_master/}; the numeric summary below will be
-populated from \texttt{results/master\_grid/stats\_all.json} once H8
-finalises the master benchmark grid. See
-\texttt{docs/H10\_REPORT\_CHANGELOG.md} for tracking.]}
-
-The controlled-workload results in Section~\ref{sec:results} demonstrate
-that GDSF behaves as predicted when each axis of the priority function is
-isolated. To assess external validity we plan to replay two publicly
-available LLM query traces:
-\begin{itemize}[leftmargin=1.4em]
-  \item \textbf{LMSys-Chat-1M}~---~a $\sim 1$M-conversation trace from the
-        LMSys Chatbot Arena with model identity, prompt/response tokens,
-        and timestamps, ingested by pipeline~H1.
-  \item \textbf{ShareGPT}~---~a community-collected ChatGPT conversation
-        corpus used as an independent workload with a different topical
-        distribution, ingested by pipeline~H2.
-\end{itemize}
-Both traces are converted to a common event schema and replayed via the
-harness in pipeline~H3, so that the same eviction implementations used in
-Section~\ref{sec:results} run against real user traffic rather than
-synthetic distributions.
-
-\paragraph{Placeholder results.} Once the upstream pipelines land,
-two figures (planned labels \texttt{fig:master-realtrace-1} and
-\texttt{fig:master-realtrace-2}) will show, respectively, the CWHR
-trajectory per policy on LMSys and on ShareGPT, and the $\Delta$CWHR of
-GDSF over each baseline with BCa $95\%$ confidence intervals. This
-report will \emph{not} state any numeric win/loss on real traces until
-the H8 stats JSON is available.
-
-%% Figure stubs (kept commented until fig_master_{1,2}.pdf exist)
-% \begin{figure}[t]
-%   \centering
-%   \includegraphics[width=0.98\linewidth]{fig_master_1.pdf}
-%   \caption{[pending] Real-trace CWHR per policy on LMSys-Chat-1M.}
-%   \label{fig:master-realtrace-1}
-% \end{figure}
-%
-% \begin{figure}[t]
-%   \centering
-%   \includegraphics[width=0.98\linewidth]{fig_master_2.pdf}
-%   \caption{[pending] Real-trace CWHR per policy on ShareGPT.}
-%   \label{fig:master-realtrace-2}
-% \end{figure}
-
-%% ============================================================================
-\section{Comparison to State-of-the-Art Baselines}
-\label{sec:sota}
-
-\textbf{[NOTE: this section pending H4 (W-TinyLFU~/~ARC~/~S3-FIFO
-implementations and comparative benchmark run). Figure
-\texttt{fig\_master\_3} (advisor-critical) is not yet produced. Numeric
-claims below are placeholders and will resolve to
-\texttt{results/master\_grid/stats\_all.json}.]}
-
-The classical baselines used in Section~\ref{sec:results} (LRU, FIFO,
-LFU, Random) predate the modern caching literature. A fair master's-level
-evaluation must ask whether GDSF's cost-awareness still pays off when
-compared to policies that are themselves designed to beat LRU on skewed
-workloads. Pipeline~H4 adds three such baselines:
-\begin{itemize}[leftmargin=1.4em]
-  \item \textbf{W-TinyLFU}~\cite{tinylfu}~---~admission filtering by
-        Count-Min-Sketch~\cite{countminsketch} frequency plus a small
-        LRU window.
-  \item \textbf{ARC}~\cite{megiddo2003arc}~---~adaptive balance between
-        recency and frequency segments.
-  \item \textbf{S3-FIFO}~\cite{yang2024sosp}~---~small/main FIFO
-        segments with ghost-queue promotion.
-\end{itemize}
-
-\paragraph{Placeholder table.} Once H4 lands, a table analogous to
-Table~\ref{tab:highvar} will be added showing hit rate, CWHR, and dollar
-savings for each of the seven policies (five original + three modern
-baselines) on each real trace, with paired $t$-tests and
-Bonferroni-corrected $p$-values against GDSF. The advisor-critical
-figure~\texttt{fig\_master\_3} will visualise the CWHR gap between GDSF
-and each modern baseline as a function of cache size.
-
-\paragraph{Expected story.} The honest hypothesis~---~stated up front so
-it can be falsified~---~is that \emph{W-TinyLFU may match or beat GDSF
-on raw hit rate on real traces, but GDSF should retain a cost-savings
-advantage on cost-heterogeneous segments}. If the real-trace evaluation
-refutes this, the paper will report the refutation.
-
-%% ============================================================================
-\section{Semantic-Aware Cost-Aware Eviction: SemanticGDSF}
-\label{sec:semgdsf}
-
-\textbf{[NOTE: this section pending H5 (SemanticGDSF implementation and
-ablation). Figure \texttt{fig\_master\_4} not yet produced.]}
-
-Semantic caches differ from object caches in one critical way: two
-entries can be \emph{semantically redundant} even though they have
-different keys. Evicting one of a pair of near-duplicates loses no
-information (the surviving twin will absorb the future traffic), while
-evicting the sole occupant of an isolated region of embedding space
-loses coverage.
-
-SemanticGDSF extends the priority function of
-Equation~\ref{eq:gdsf} with an embedding-density penalty~$\rho(i)$:
-\begin{equation}
-  \text{Priority}_{\text{sem}}(i) \;=\; L \;+\; \frac{\text{freq}(i)^{\alpha} \cdot \text{cost}(i)^{\beta}}{\text{size}(i) \cdot (1 + \gamma \, \rho(i))},
-  \label{eq:semgdsf}
-\end{equation}
-where $\rho(i)$ is a local density estimate (e.g., number of neighbours
-within radius $\varepsilon$ in the embedding space) and $\gamma \ge 0$
-controls the strength of the redundancy penalty. Setting $\gamma = 0$
-recovers standard GDSF. The design and its ablation over $\gamma$ will
-be produced by pipeline~H5.
-
-\paragraph{Failure modes to discuss.} SemanticGDSF is expected to fail
-gracefully but not uniformly:
-(a)~queries in dense but distinctive clusters (e.g., popular FAQs) may be
-over-evicted if $\gamma$ is too large;
-(b)~an outdated embedding model can misestimate density;
-(c)~stateful queries whose ``correct'' answer differs across users can
-be silently merged. Section~\ref{sec:discuss} will inherit these
-caveats once H5's ablation is available.
-
-%% ============================================================================
-\section{Formal Analysis}
-\label{sec:theory}
-
-\textbf{[NOTE: this section pending H6 (formal theoretical contribution).
-When ready, this section will be filled by \texttt{\textbackslash input\{sections/theory.tex\}}
-from H6's output. Placeholder scaffolding follows so downstream sections
-can reference the intended contents.]}
-
-The intended contents are:
-\begin{itemize}[leftmargin=1.4em]
-  \item A restatement of the weighted-caching competitive-ratio result
-        of Cao et al.~\cite{cao1997costaware} adapted to the GDSF form
-        used in this paper.
-  \item An analysis of the clock-inflation invariant
-        ($L_{t+1} \ge L_t$) as a source of implicit aging.
-  \item A discussion of how the size term $s_i$ interacts with the
-        competitive-ratio bound when sizes span multiple orders of
-        magnitude, tying back to the size-varying results in
-        Table~\ref{tab:sizevar}.
-  \item Assumptions and limitations of the analysis, which are merged
-        into the ``Threats to Validity'' subsection of
-        Section~\ref{sec:discuss}.
-\end{itemize}
-
-% \input{sections/theory.tex}  %% will be enabled once H6 lands
-
-%% ============================================================================
-\section{Robustness Studies}
-\label{sec:robustness}
-
-\textbf{[NOTE: this section pending H7 (robustness experiments). Figures
-\texttt{fig\_master\_5}, \texttt{fig\_master\_6}, \texttt{fig\_master\_7}
-not yet produced.]}
-
-A master's-level evaluation must ask not only ``does GDSF win under ideal
-conditions?'' but also ``does it degrade gracefully under realistic
-perturbations?'' Pipeline~H7 will produce three studies:
-\begin{enumerate}[leftmargin=1.4em]
-  \item \textbf{Cost-noise sensitivity} (\texttt{fig\_master\_5}):
-        multiplicative log-normal noise is added to the estimated
-        per-entry cost before it enters the GDSF priority; CWHR is
-        measured as noise variance grows.
-  \item \textbf{Distribution shift} (\texttt{fig\_master\_6}): the
-        replay is split into two halves with a topical or cost-mix shift
-        between them, testing how quickly each policy adapts.
-  \item \textbf{Cold-start convergence} (\texttt{fig\_master\_7}): CWHR
-        is tracked as a function of the number of queries seen from a
-        fresh (empty) cache, to quantify warm-up time.
-\end{enumerate}
-
-\paragraph{Placeholder claim.} We expect GDSF's advantage to
-\emph{diminish} but not vanish under moderate cost noise (up to
-$\sigma \approx 0.5$ log-space) and to trail behind adaptive baselines
-(ARC, W-TinyLFU) under abrupt distribution shift. Concrete numbers will
-be reported once H7 produces them.
-
-
-\fi  % end of pending H1..H7 sections
 %% ============================================================================
 \section{Discussion}
 \label{sec:discuss}
@@ -1067,12 +881,11 @@ savings.
 We separate limitations that follow from the current pipeline scope from
 those that would apply even to a fully executed master's-level study.
 
-\paragraph{Scope limitations (fixable by finishing H1--H9).}
+\paragraph{Scope limitations.}
 The controlled-workload evaluation is synthetic. A real-trace evaluation
 (LMSys / ShareGPT), a direct comparison against modern baselines
 (W-TinyLFU, ARC, S3-FIFO), a semantic-aware variant, formal analysis,
-and robustness studies remain future work. Every extension is enumerated
-in \texttt{docs/H10\_REPORT\_CHANGELOG.md}.
+and robustness studies remain future work.
 
 \paragraph{Threats to internal validity.}
 (1)~All controlled-workload numbers derive from a single benchmark run
@@ -1125,7 +938,7 @@ hit rate on skewed workloads whose head fits in cache, and a
 SemanticGDSF variant would open a distinct axis (embedding-density
 penalisation) that is orthogonal to what any prior policy exploits.
 Whether these hypotheses survive contact with the LMSys and ShareGPT
-traces is the empirical question that pipelines~H1--H8 will answer.
+traces is an empirical question we leave to future work.
 
 \paragraph{Future work.}
 \emph{Adaptive parameters} via multi-armed bandit tuning on a sliding

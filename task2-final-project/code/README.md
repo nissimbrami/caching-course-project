@@ -36,7 +36,7 @@ python -m venv .venv
 source .venv/bin/activate   # or .venv\Scripts\activate on Windows
 pip install -r requirements.txt
 pip install -e .
-python -m pytest tests/ -q                # 300 tests, ~15s
+python -m pytest tests/ -q                # 304 tests, ~16s
 python -m benchmarks.run_all --n-runs 30  # full suite, ~10-30 min
 python scripts/generate_plots.py          # regenerate the 4 report figures
 bash scripts/run_live_smoke.sh            # ~2 min end-to-end verification
@@ -76,7 +76,7 @@ Eviction picks the entry with the smallest priority — an
 │   ├── policies.py              # LRU / FIFO / LFU / Random / GDSF wrappers
 │   ├── workloads.py             # 6 synthetic workloads
 │   └── metrics.py               # BenchmarkResult, MetricsCollector, ResourceSampler
-├── tests/                       # 300 tests: unit + integration + property (Hypothesis)
+├── tests/                       # 304 tests: unit + integration + property (Hypothesis)
 ├── scripts/
 │   ├── run_all.sh               # one-command reproduction
 │   ├── run_live_smoke.sh        # ~2-minute end-to-end smoke test
@@ -111,7 +111,7 @@ with paired t-tests + Bonferroni correction and BCa bootstrap 95 % CIs.
 ## Reproducing the report numbers
 
 ```bash
-python -m pytest tests/ -q                # 300 tests
+python -m pytest tests/ -q                # 304 tests
 python -m benchmarks.run_all --n-runs 30  # 3600-row benchmark grid
 python scripts/compute_statistics.py      # paired-t + BCa
 python scripts/run_ablation.py --num-runs 10

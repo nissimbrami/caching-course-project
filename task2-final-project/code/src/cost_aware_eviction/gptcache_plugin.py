@@ -255,10 +255,17 @@ class GDSFEvictionPlugin(EvictionBase):
         return self._manager.evict_one()
 
     def get(self, obj: Any = None) -> Any:
-        """Deprecated alias for :meth:`next_victim`. Kept for backwards
-        compatibility with the existing GPTCache ``EvictionBase`` interface.
+        """Handle a GPTCache hit notification.
+
+        GPTCache's ``MemoryCacheEviction.get(obj)`` bumps recency/frequency on a
+        cache hit; it does NOT select a victim. We honour that contract when
+        called with an argument. Zero-arg calls fall back to :meth:`next_victim`
+        for backwards compatibility with older callers.
         """
-        return self.next_victim(obj)
+        if obj is None:
+            return self.next_victim(None)
+        self._manager.access(obj)
+        return None
 
     @property
     def policy(self) -> str:

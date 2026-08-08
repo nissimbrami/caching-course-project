@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Callable, List, Tuple
+from typing import Callable, Dict, List, Tuple
 
 from src.cost_aware_eviction.eviction_manager import GDSFEvictionManager
 from src.cost_aware_eviction.priority_queue import IndexedMinHeap
@@ -457,14 +457,21 @@ and eviction handshake. The plugin is genuinely inside GPTCache.
     show("faiss backend ", type(faiss).__name__)
 
     print()
-    say("Step 2: build the GDSF plugin, wire an on_evict callback into it.")
-    say("The callback is exactly what SSDataManager needs to purge the")
-    say("underlying storage when GDSF decides to evict something.")
+    say("Step 2: build the GDSF plugin. We wire TWO callbacks in:")
+    say("  * metadata_callback   -> lets GDSF ask 'what does key K cost?'")
+    say("  * on_evict            -> lets GDSF tell GPTCache 'purge these'")
+    say("So the REAL per-question dollar cost reaches the GDSF formula,")
+    say("not a flat default.")
     evicted_log: List[Any] = []
+    id_to_metadata: Dict[int, Tuple[int, float]] = {}
 
     def on_evict_callback(keys: List[Any]) -> None:
         evicted_log.extend(keys)
         print(f"    [on_evict fired] GPTCache purging keys: {keys}")
+
+    def cost_lookup(key: Any) -> Tuple[int, float]:
+        # GPTCache calls plugin.put([sql_id]); we translate sql_id -> (size,cost)
+        return id_to_metadata.get(key, (1, 1.0))
 
     plugin = GDSFEvictionPlugin(
         maxsize=3,  # tiny -- forces immediate eviction after 4 puts
@@ -472,10 +479,12 @@ and eviction handshake. The plugin is genuinely inside GPTCache.
         beta=1.0,
         default_entry_size=1,   # each entry counts as 1 unit
         default_entry_cost=1.0,
+        metadata_callback=cost_lookup,
         on_evict=on_evict_callback,
     )
     show("plugin.policy", plugin.policy)
-    show("plugin has on_evict wired?", plugin._on_evict is not None)
+    show("plugin has metadata_callback wired?", plugin._metadata_callback is not None)
+    show("plugin has on_evict wired?",          plugin._on_evict is not None)
 
     print()
     say("Step 3: hand the plugin to SSDataManager as eviction_base=.")
@@ -489,6 +498,8 @@ and eviction handshake. The plugin is genuinely inside GPTCache.
     print()
     say("Step 4: save 3 (question, answer, fake_embedding) triples.")
     say("Costs: q1=$0.10 (cheap), q2=$1.00 (medium), q3=$5.00 (expensive).")
+    say("After each save we read back the newly-assigned sql_id and register")
+    say("its real cost in id_to_metadata so GDSF sees the true dollar value.")
     rng = np.random.default_rng(42)
     triples = [
         ("q1_what_is_2_plus_2",        "4",                              0.10),
@@ -496,22 +507,28 @@ and eviction handshake. The plugin is genuinely inside GPTCache.
         ("q3_explain_quantum_gravity", "It's an unsolved problem where...", 5.00),
     ]
     for q, a, cost in triples:
-        # pre-register the size/cost for this entry key
-        # GPTCache will call plugin.put([id]) with an integer id from sqlite,
-        # so we need to intercept via metadata_callback to attach cost.
-        # Simpler approach: after save, look up the id and register.
         emb = rng.standard_normal(dim).astype("float32")
         data_manager.save(q, a, emb)
-        print(f"    saved: {q[:35]:<35} (cost=${cost:.2f})")
+        # sql_id was just auto-assigned; grab the newest live id and record cost
+        live_ids = list(sqlite.get_ids(deleted=False))
+        if live_ids:
+            new_id = max(live_ids)
+            id_to_metadata[new_id] = (len(a.encode("utf-8")), cost)
+        print(f"    saved: {q[:35]:<35} (cost=${cost:.2f}, sql_id={new_id})")
 
     show("plugin.num_entries after 3 saves", plugin.num_entries)
+    show("id_to_metadata registered",        dict(id_to_metadata))
     show("evictions so far",                 len(evicted_log))
 
     print()
     say("Step 5: save a 4th entry -- this MUST overflow the plugin's cap of 3.")
-    q4, a4 = ("q4_capital_of_france", "Paris")
+    say("GDSF should keep the expensive q3 ($5) and evict a cheap one.")
+    q4, a4, c4 = ("q4_capital_of_france", "Paris", 0.05)
     emb4 = rng.standard_normal(dim).astype("float32")
     data_manager.save(q4, a4, emb4)
+    live_ids = list(sqlite.get_ids(deleted=False))
+    if live_ids:
+        id_to_metadata[max(live_ids)] = (len(a4.encode("utf-8")), c4)
     show("plugin.num_entries after 4th save", plugin.num_entries)
     show("evictions total",                   len(evicted_log))
     show("evicted keys",                      evicted_log)

@@ -346,18 +346,22 @@ function EVICT():
 \end{lstlisting}
 
 \subsection{Cost Estimation}
-For LLM responses, generation cost is estimated using the token-based
-pricing model:
+For LLM responses, generation cost is estimated as an output-token-based
+proxy: input-token costs are absorbed into a single per-response price
+per model. Formally,
 \begin{equation}
-  \text{cost}(i) \;=\; \text{input\_tokens}(i) \cdot p_{\text{in}} \;+\; \text{output\_tokens}(i) \cdot p_{\text{out}},
+  \text{cost}(i) \;=\; \text{output\_tokens}(i) \cdot p_{\text{out}},
   \label{eq:cost}
 \end{equation}
-where $p_{\text{in}}$ and $p_{\text{out}}$ are per-token prices for the
-target model (e.g., $\$0.03/\text{1K}$ input tokens and $\$0.06/\text{1K}$
-output tokens for GPT-4). In our experimental setup, we simulate
-heterogeneous costs by assigning cost values drawn from specified
-distributions (uniform, log-normal, bimodal) to represent the diversity of
-real LLM queries.
+where $p_{\text{out}}$ is the per-output-token price for the target
+model (e.g., $\$0.06/\text{1K}$ output tokens for GPT-4, $\$0.002/\text{1K}$
+for GPT-3.5-turbo). Because prompts are typically much shorter than
+generated completions and prompt pricing is a fixed fraction of completion
+pricing per model, this single-price proxy preserves the relative cost
+ordering across entries that GDSF's priority formula depends on. In our
+experimental setup, we simulate heterogeneous costs by assigning cost
+values drawn from specified distributions (uniform, log-normal, bimodal)
+to represent the diversity of real LLM queries.
 
 \subsection{Data Structure and Complexity}
 We implement the priority queue as an \textbf{indexed binary min-heap}
@@ -468,6 +472,19 @@ random seeds (pinned for reproducibility). We report:
         (paired by (seed, cache size), $n=120$ per workload) with
         \textbf{Bonferroni correction} across the six workloads.
 \end{itemize}
+
+\paragraph{Caveat on observation independence.} Our paired-\emph{t}
+analysis treats each (seed, cache-size) pair as an independent
+observation, yielding $n=120$ per policy pair. In practice, the four
+cache-size observations that share a seed reuse the same synthetic
+workload sequence, so they are not fully independent. A cluster-robust
+standard error (clustering by seed) would inflate the standard errors
+and thus the reported \emph{p}-values. Effect sizes (Cohen's \emph{d})
+are unaffected. Because our observed effects are large ($d > 1$ on all
+winning workloads), the conclusions are robust to this correction; we
+retain the naive $n=120$ analysis for transparency and note the caveat
+here.
+
 All statistical outputs are produced by
 \texttt{scripts/compute\_statistics.py}, which reads
 \texttt{results/benchmark\_results\_<ts>.json} and writes
@@ -719,18 +736,23 @@ conditions (Tables~\ref{tab:uniform} and~\ref{tab:zipf}).
 
 \begin{table}[t]
   \centering
-  \caption{Operational performance (mean over $n=120$, high-variance workload).}
+  \caption{Operational performance (mean over $n=120$, high-variance workload).
+           Memory measurement omitted: \texttt{sys.getsizeof()} does not
+           recurse into object attributes, so it reports a constant
+           per-entry size regardless of the policy's true footprint;
+           a fair comparison requires a deeper accounting tool
+           (e.g., \texttt{pympler}), which is left for future work.}
   \label{tab:latency}
   \small
-  \begin{tabular}{lrrrr}
+  \begin{tabular}{lrrr}
     \toprule
-    Policy  & p50 ($\mu$s) & p95 ($\mu$s) & Ops/s & Memory/entry \\
+    Policy  & p50 ($\mu$s) & p95 ($\mu$s) & Ops/s \\
     \midrule
-    LRU     & 1.57  & 3.43   & 250{,}603 & 56\,B \\
-    FIFO    & 1.39  & 3.30   & 265{,}726 & 56\,B \\
-    LFU     & 21.21 & 181.01 &  99{,}361 & 56\,B \\
-    Random  & 3.29  & 15.82  & 188{,}012 & 56\,B \\
-    \textbf{GDSF} & \textbf{10.97} & \textbf{27.10} & \textbf{57{,}882} & \textbf{56\,B} \\
+    LRU     & 1.57  & 3.43   & 250{,}603 \\
+    FIFO    & 1.39  & 3.30   & 265{,}726 \\
+    LFU     & 21.21 & 181.01 &  99{,}361 \\
+    Random  & 3.29  & 15.82  & 188{,}012 \\
+    \textbf{GDSF} & \textbf{10.97} & \textbf{27.10} & \textbf{57{,}882} \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -740,11 +762,7 @@ $\sim 8\times$ slower at p95, but the absolute cost
 ($\sim 11\,\mu\text{s}$ median, $\sim 27\,\mu\text{s}$ p95) is dwarfed
 by any real LLM call ($100\,\text{ms}$--$5\,\text{s}$ of network~+~inference).
 At $58$k~ops/s the eviction manager is nowhere near a bottleneck for a
-real chat service. Memory overhead is identical across policies at this
-configuration because each policy stores the same
-\texttt{EntryMetadata} record (56~B/entry; see the ``Memory/entry''
-column of Table~\ref{tab:latency}), so cost-awareness is obtained
-without a memory penalty.
+real chat service.
 
 %% -- 5.8 Sensitivity --------------------------------------------------------
 \subsection{Sensitivity to Parameters}

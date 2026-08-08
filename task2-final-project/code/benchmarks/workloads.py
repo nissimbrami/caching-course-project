@@ -290,9 +290,13 @@ def generate_adversarial_lru_workload(
     expensive_size = 1024
 
     # Scan queries: IDs starting from n_expensive_recurring
-    # These are one-shot queries that appear once and pollute the cache
+    # These are one-shot queries that appear once and pollute the cache.
+    # cache_size is in BYTES (matching the benchmark runner and every other
+    # workload); convert to "how many expensive entries fit" so the scan is
+    # proportional to real capacity instead of a fixed 200-entry sweep.
     scan_base_id = n_expensive_recurring
-    n_scan_queries = cache_size * 2  # Larger than cache to force evictions
+    n_entries_that_fit = max(1, cache_size // expensive_size)
+    n_scan_queries = n_entries_that_fit * 2  # 2x capacity forces evictions
     scan_cost = 0.002
     scan_size = 256
 
@@ -317,7 +321,10 @@ def generate_adversarial_lru_workload(
             i += 1
 
         # Phase 2: Scan with cheap one-shot queries (pollutes LRU)
-        scan_length = min(rng.integers(cache_size, cache_size * 2), n_queries - i)
+        scan_length = min(
+            rng.integers(n_entries_that_fit, n_entries_that_fit * 2 + 1),
+            n_queries - i,
+        )
         for _ in range(scan_length):
             if i >= n_queries:
                 break

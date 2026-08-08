@@ -220,12 +220,12 @@ You have verified Task 2 end-to-end when all of these are true:
 
 - [ ] `bash scripts/run_live_smoke.sh` prints `[OK] All stages passed.`
 - [ ] Section 2.6 output matches `0.118999 / 13.85 / 8.60e-26 / [0.102430, 0.135792]`
-- [ ] Section 2.7 shows `300 passed` for every seed
+- [ ] Section 2.7 shows `304 passed` for every seed
 - [ ] `../report-latex/report.pdf` exists at 8 pages / ~654 KB
 
 If all four pass, the report's numerical claims are reproducible from the
 code in this directory — which is the deliverable Prof. Einziger asks for
-in `INSTRUCTIONS.md §1, §6, §9 Stage 7`.
+in the course brief (Task 2: research mini-paper + reproducible code).
 
 ---
 

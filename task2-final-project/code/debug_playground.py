@@ -430,8 +430,10 @@ This lesson is different. Here we:
   3. Save (question, answer, fake_embedding) triples through GPTCache's
      own import_data() pipeline
   4. Force capacity overflow so GPTCache asks the plugin who to evict
-  5. Show that when the plugin decides, GPTCache's on_evict fires and
-     removes the item from the underlying SQLite + FAISS stores
+  5. Show that when the plugin decides, the on_evict callback we passed
+     fires with the evicted sql_ids (the callback in this demo just logs
+     them; a production callback would forward them to SSDataManager._clear
+     to purge SQLite + FAISS)
 
 No LLM is called (we fabricate the answers) but the ENTIRE GPTCache
 pipeline is live: sqlite storage, FAISS vector index, data_manager,
@@ -459,7 +461,10 @@ and eviction handshake. The plugin is genuinely inside GPTCache.
     print()
     say("Step 2: build the GDSF plugin. We wire TWO callbacks in:")
     say("  * metadata_callback   -> lets GDSF ask 'what does key K cost?'")
-    say("  * on_evict            -> lets GDSF tell GPTCache 'purge these'")
+    say("  * on_evict            -> lets GDSF hand evicted sql_ids back to")
+    say("                            the caller (in this demo the callback")
+    say("                            just logs them; SSDataManager._clear is")
+    say("                            the production purge path)")
     say("So the REAL per-question dollar cost reaches the GDSF formula,")
     say("not a flat default.")
     evicted_log: List[Any] = []
@@ -467,7 +472,7 @@ and eviction handshake. The plugin is genuinely inside GPTCache.
 
     def on_evict_callback(keys: List[Any]) -> None:
         evicted_log.extend(keys)
-        print(f"    [on_evict fired] GPTCache purging keys: {keys}")
+        print(f"    [on_evict fired] plugin reported evicted sql_ids: {keys}")
 
     def cost_lookup(key: Any) -> Tuple[int, float]:
         # GPTCache calls plugin.put([sql_id]); we translate sql_id -> (size,cost)
@@ -539,12 +544,15 @@ and eviction handshake. The plugin is genuinely inside GPTCache.
     say("  2. It called self.eviction_base.put([new_id]) -- our plugin.")
     say("  3. Our plugin ran the GDSF formula, chose the lowest-priority key.")
     say("  4. Our plugin fired on_evict(evicted_keys) -- the callback we passed.")
-    say("  5. The callback (owned by SSDataManager) purged the evicted key")
-    say("     from both the SQLite metadata store and the FAISS vector index.")
+    say("  5. Our on_evict callback fired with the evicted sql_ids.")
+    say("     (In this demo the callback just logs; a production integration")
+    say("     would forward the ids to SSDataManager._clear to hard-purge")
+    say("     SQLite + FAISS.)")
     print()
-    say("That is a REAL GPTCache <-> GDSF handshake. Not a bypass. Not a mock.")
-    say("If someone points at your project and says \"the plugin doesn't really")
-    say("plug in,\" this lesson is the counter-example.")
+    say("That is a REAL GPTCache <-> GDSF handshake for the DECISION half.")
+    say("The plugin is genuinely wired in as SSDataManager.eviction_base and")
+    say("SSDataManager.save() drives put() through it. If someone claims the")
+    say("plugin doesn't really plug in, this lesson is the counter-example.")
 
     pause(interactive)
     return plugin

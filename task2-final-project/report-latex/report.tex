@@ -390,34 +390,41 @@ $500\,\text{ms}$--$5\,\text{s}$ per query), the microsecond-scale heap
 operations are negligible in practice.
 
 \subsection{Integration with GPTCache}
-GPTCache defines an \texttt{EvictionBase} abstract class with methods
-\texttt{put()}, \texttt{get()}, and \texttt{evict()}. Our GDSF
-implementation extends this interface as shown in
-Listing~\ref{lst:gdsf-python}. Existing GPTCache deployments can adopt
-cost-aware eviction by changing a single configuration parameter.
+GPTCache defines an \texttt{EvictionBase} abstract class with two
+abstract methods, \texttt{put(objs)} and \texttt{get(obj)}, plus an
+abstract \texttt{policy} string property used by GPTCache's factory to
+select a policy by name. Eviction is not exposed as an explicit
+method: overflow during \texttt{put()} is signalled by invoking the
+\texttt{on\_evict} callback supplied at construction time, which the
+data manager (e.g. \texttt{SSDataManager}) uses to purge the
+underlying storage. Our GDSF adapter implements this contract as
+shown in Listing~\ref{lst:gdsf-python}. Existing GPTCache deployments
+can adopt cost-aware eviction by changing a single configuration
+parameter.
 
-\begin{lstlisting}[caption={GDSF plugin for GPTCache (excerpt from \texttt{src/cost\_aware\_eviction/eviction\_manager.py}).}, label=lst:gdsf-python]
-class GDSFEviction(EvictionBase):
-    def __init__(self, alpha=1.0, beta=1.0, max_size=1000):
-        self._clock = 0.0
-        self.alpha, self.beta = alpha, beta
-        self._heap = IndexedMinHeap()
-        self._metadata = {}     # key -> {freq, cost, size}
+\begin{lstlisting}[caption={GDSF plugin for GPTCache (excerpt from \texttt{src/cost\_aware\_eviction/gptcache\_plugin.py}).}, label=lst:gdsf-python]
+class GDSFEvictionPlugin(EvictionBase):
+    def __init__(self, maxsize, alpha=1.0, beta=1.0,
+                 metadata_callback=None, on_evict=None):
+        self._manager = GDSFEvictionManager(maxsize, alpha, beta)
+        self._metadata_callback = metadata_callback
+        self._on_evict = on_evict
 
-    def put(self, key, cost, size):
-        self._metadata[key] = {"freq": 1, "cost": cost, "size": size}
-        self._heap.push(key, self._priority(key))
+    @property
+    def policy(self) -> str:
+        return "GDSF"                  # required by EvictionBase
 
-    def get(self, key):
-        self._metadata[key]["freq"] += 1
-        self._heap.update(key, self._priority(key))
+    def put(self, objs):               # called on new inserts
+        evicted = []
+        for key in objs:
+            size, cost = self._get_metadata(key)
+            evicted.extend(self._manager.put(key, size, cost))
+        if evicted and self._on_evict:
+            self._on_evict(evicted)    # data manager purges storage
 
-    def evict(self):
-        key, priority = self._heap.pop()
-        if priority > self._clock:      # monotone clock invariant
-            self._clock = priority
-        del self._metadata[key]
-        return key
+    def get(self, obj):                # called on cache hit
+        self._manager.access(obj)      # bump frequency; no eviction
+        return None
 \end{lstlisting}
 
 %% ============================================================================

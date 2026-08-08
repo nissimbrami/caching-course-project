@@ -11,7 +11,7 @@ Two deliverables:
 - Contribution: cost-aware **GDSF** eviction as a drop-in
   `EvictionBase` plugin for [zilliztech/GPTCache](https://github.com/zilliztech/GPTCache).
 - Code, tests, benchmarks: [`task2-final-project/code/`](task2-final-project/code/)
-  (300 tests, 30-seed benchmark, α×β ablation).
+  (304 tests, 30-seed benchmark, α×β ablation).
 - **Report (canonical, ACM `acmart` sigconf, 8 pages, pdfLaTeX):**
   [`task2-final-project/report-latex/report.pdf`](task2-final-project/report-latex/report.pdf).
   Source: [`report.tex`](task2-final-project/report-latex/report.tex) +
@@ -36,11 +36,11 @@ All numbers resolve to keys in `task2-final-project/code/results/stats_20260721_
 git clone https://github.com/nissimbrami/caching-course-project
 cd caching-course-project/task2-final-project/code
 pip install -r requirements.txt && pip install -e .
-pytest -q                                          # 300 tests
+pytest -q                                          # 304 tests
 python -m benchmarks.run_all --n-runs 30           # 3,600 experiments
 python scripts/compute_statistics.py               # stats JSON
 python scripts/run_ablation.py --num-runs 30       # α×β grid
-python scripts/generate_plots.py                   # Figures 1–8
+python scripts/generate_plots.py                   # 4 figures (Figs 2, 3, 5, 8)
 ```
 
 The LaTeX PDF is auto-built on every push by

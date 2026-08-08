@@ -12,7 +12,7 @@ Two deliverables:
   `EvictionBase` plugin for [zilliztech/GPTCache](https://github.com/zilliztech/GPTCache).
 - Code, tests, benchmarks: [`task2-final-project/code/`](task2-final-project/code/)
   (259 tests, 30-seed benchmark, α×β ablation).
-- **Report (canonical, ACM `acmart` sigconf, 7 pages, pdfLaTeX):**
+- **Report (canonical, ACM `acmart` sigconf, 8 pages, pdfLaTeX):**
   [`task2-final-project/report-latex/report.pdf`](task2-final-project/report-latex/report.pdf).
   Source: [`report.tex`](task2-final-project/report-latex/report.tex) +
   [`references.bib`](task2-final-project/report-latex/references.bib).

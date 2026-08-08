@@ -17,6 +17,14 @@ htmlcov/
 # Old / draft presentation artifacts (kept locally only)
 task1-presentation/RadixAttention_Presentation*.pptx
 
+# Task 1: only the .pptx is part of the submission; everything else stays local
+task1-presentation/build_streaming_llm_deck.py
+task1-presentation/code/
+task1-presentation/notes/
+task1-presentation/papers/
+task1-presentation/*.mp4
+task1-presentation.zip
+
 # Reference decks (prof's Chapter 1, prior student SCALM, course intro) --
 # copyright the original authors; kept locally for style reference only.
 task1-presentation/reference-decks/

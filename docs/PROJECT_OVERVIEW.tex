@@ -336,7 +336,7 @@ GDSF policy plugs in.
 \subsection{The assignment}
 An open-source contribution + a research paper on a caching-in-LLMs
 topic. Deliverables: a real PR-ready contribution to an upstream repo,
-plus a 7-page ACM-\texttt{acmart} sigconf paper.
+plus an 8-page ACM-\texttt{acmart} sigconf paper.
 
 \subsection{What we chose}
 Add a new eviction policy to GPTCache: \textbf{GDSF~---
@@ -369,13 +369,13 @@ among deterministic algorithms.
   \item \textbf{Upstream contribution}~--- a real PR-ready branch on my
         fork \texttt{nissimbrami/GPTCache}, ready to open against
         \texttt{zilliztech/GPTCache}. 3 files, +389 lines.
-  \item \textbf{Research paper}~--- a 7-page ACM \texttt{acmart} sigconf
+  \item \textbf{Research paper}~--- an 8-page ACM \texttt{acmart} sigconf
         write-up in \texttt{task2-final-project/report-latex/report.pdf}.
   \item \textbf{Plugin code}~---
-        \texttt{code/src/cost\_aware\_eviction/}, 1{,}060 lines. Heart
-        is \texttt{gdsf\_eviction.py}~--- an indexed min-heap with
+        \texttt{code/src/cost\_aware\_eviction/}, 1{,}074 lines. Heart
+        is \texttt{eviction\_manager.py}~--- an indexed min-heap with
         $O(\log n)$ priority updates, thread-safe via a single
-        \texttt{RLock}.
+        \texttt{Lock}.
   \item \textbf{Test suite}~--- \textbf{259 tests}, 3{,}332 lines, all
         passing. Cover factory wiring, backwards-compat API, cost-aware
         ranking, size penalisation, clock monotonicity, tie-breaking,
@@ -437,7 +437,7 @@ that puts a semantic response cache in front of LLM APIs. On realistic
 LLM workloads where regeneration cost varies by 100$\times$ between
 entries, my policy saves up to \textbf{91\%} more money than the default
 LRU with $p < 10^{-58}$. Contribution is a PR-ready branch on
-\texttt{zilliztech/GPTCache}; the write-up is a 7-page ACM sigconf
+\texttt{zilliztech/GPTCache}; the write-up is an 8-page ACM sigconf
 paper.
 \end{quote}
 

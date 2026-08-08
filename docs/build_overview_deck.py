@@ -287,19 +287,19 @@ def build():
                                  "cost(i) = the recorded $ per API call for that entry. "
                                  "L = clock counter to prevent starvation."),
                                 ("What we ship",
-                                 "PR-ready branch fork of GPTCache: 1060-line plugin, "
+                                 "PR-ready branch fork of GPTCache: 1074-line plugin, "
                                  "259 unit tests, benchmark harness, 3600-run study, "
-                                 "7-page ACM sigconf paper.")])))
+                                 "8-page ACM sigconf paper.")])))
     slides.append(("bullets", ("Results (3600 runs, paired-t + Bonferroni + BCa bootstrap)",
-                               [("Cost-Weighted Hit Rate on Zipf-0.9 workloads",
-                                 "+25.7% vs LRU, +32.3% vs LFU, +91.0% vs FIFO, "
-                                 "+18.8% vs Random."),
+                               [("Per-workload cost-weighted savings vs LRU baseline",
+                                 "high-variance-cost: +25.7%; bursty: +32.3%; "
+                                 "size-varying: +91.0%; adversarial-LRU: +18.8%."),
                                 ("Uniform-cost sanity check",
                                  "\u00b10.005% vs baselines \u2014 policy correctly "
                                  "collapses to LFU-like behaviour when there's "
                                  "nothing to optimise."),
                                 ("Overhead",
-                                 "-0.037% throughput vs LRU \u2014 statistically indistinguishable. "
+                                 "-0.037% dollar-throughput vs LRU \u2014 statistically indistinguishable. "
                                  "Priority computation is O(1) per access."),
                                 ("Statistics",
                                  "All wins Bonferroni-adjusted p<0.001 with 95% BCa CIs "

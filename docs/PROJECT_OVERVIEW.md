@@ -336,7 +336,7 @@ in.
 Prof. Einziger's Task 2: an open-source contribution and a research
 paper on a caching-in-LLMs topic. Deliverable: (a) a real
 pull-request-ready contribution to an upstream repo, (b) a
-7-page ACM-style paper written up in `acmart` sigconf.
+8-page ACM-style paper written up in `acmart` sigconf.
 
 ### 4.2 What we chose
 
@@ -377,15 +377,15 @@ Two things:
 
 1. **The upstream contribution** — a real PR-ready branch on my fork
    of `zilliztech/GPTCache`.
-2. **The research paper** — a 7-page ACM `acmart` sigconf write-up in
+2. **The research paper** — an 8-page ACM `acmart` sigconf write-up in
    `task2-final-project/report-latex/report.pdf`.
 
 Plus a substantial amount of supporting code:
 
-- `task2-final-project/code/src/cost_aware_eviction/` — 1,060 lines of
-  production Python. The heart is `gdsf_eviction.py`, which is a
+- `task2-final-project/code/src/cost_aware_eviction/` — 1,074 lines of
+  production Python. The heart is `eviction_manager.py`, which is a
   clean implementation of GDSF backed by an indexed min-heap
-  (O(log n) priority updates) with a single `RLock` for thread
+  (O(log n) priority updates) with a single `Lock` for thread
   safety. Wired into GPTCache's `EvictionBase` factory as
   `policy="GDSF"`.
 - `task2-final-project/code/tests/` — **259 unit tests**, 3,332 lines,
@@ -473,7 +473,7 @@ is about:
 > realistic LLM workloads where regeneration cost varies by 100×
 > between entries, my policy saves **up to 91%** more money than the
 > default LRU with p < 1e-58. Contribution is a PR-ready branch on
-> zilliztech/GPTCache; the write-up is a 7-page ACM sigconf paper."
+> zilliztech/GPTCache; the write-up is an 8-page ACM sigconf paper."
 
 ---
 
@@ -502,6 +502,6 @@ last slide of the presentation says.
 - **Full paper summary with page references:** `task1-presentation/papers/streaming-llm/deep-read.md`
 - **Critical analysis of the paper:** `task1-presentation/papers/streaming-llm/critical-analysis.md`
 - **Slide-by-slide speaker notes:** `task1-presentation/notes/speaker-notes.md`
-- **The GDSF plugin itself:** `task2-final-project/code/src/cost_aware_eviction/gdsf_eviction.py`
+- **The GDSF plugin itself:** `task2-final-project/code/src/cost_aware_eviction/eviction_manager.py`
 - **The research paper PDF:** `task2-final-project/report-latex/report.pdf`
 - **The upstream PR draft:** `task2-final-project/GPTCACHE_PR.md`

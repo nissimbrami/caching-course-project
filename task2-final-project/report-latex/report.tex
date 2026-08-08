@@ -124,7 +124,7 @@ a clean theoretical grounding~\cite{cherkasova1998gdsf, cao1997costaware}.
   \item An \textbf{implementation as a drop-in \texttt{EvictionBase}
         plugin for GPTCache}, with $O(\log n)$ per-operation complexity
         via an indexed min-heap and full thread safety.
-  \item A \textbf{comprehensive benchmark harness}~---~$6$ workloads
+  \item A \textbf{benchmark harness}~---~$6$ workloads
         $\times$ $5$ policies $\times$ $4$ cache sizes $\times$ $30$ runs
         ($\sim3{,}600$ experiments)~---~with statistical rigor
         (paired $t$-tests, Bonferroni correction, BCa bootstrap
@@ -136,11 +136,23 @@ a clean theoretical grounding~\cite{cherkasova1998gdsf, cao1997costaware}.
         duplicate keys.
 \end{enumerate}
 
+\paragraph{Scope of empirical evidence.}
+Sections~\ref{sec:setup}--\ref{sec:results} evaluate GDSF on six
+\emph{synthetic} workloads that were designed to isolate each axis of the
+priority function (cost variance, size variance, temporal burstiness,
+adversarial recency). Those results establish that cost-aware eviction
+behaves as predicted on controlled inputs. Extensions on real traces,
+comparisons to modern baselines (W-TinyLFU, ARC, S3-FIFO), a semantic
+variant, formal analysis, and robustness studies are tracked as future
+work in \texttt{docs/H10\_REPORT\_CHANGELOG.md}.
+
 The remainder of this paper: Section~\ref{sec:related} covers related work,
 Section~\ref{sec:design} the system design,
 Section~\ref{sec:setup} the experimental setup, Section~\ref{sec:results}
-the results, Section~\ref{sec:discuss} the discussion, and
-Section~\ref{sec:conclude} conclusions and future work.
+the controlled-workload results,
+Section~\ref{sec:discuss} the discussion (including limitations and
+threats to validity), and Section~\ref{sec:conclude} conclusions and
+future work.
 
 %% ============================================================================
 \section{Background and Related Work}
@@ -194,13 +206,62 @@ arlitt2000eval} generalises the Greedy-Dual algorithm by incorporating
 frequency, cost, and size into a unified priority score. Upon eviction,
 the item with the minimum priority is removed, and a global clock value
 is inflated to the evicted item's priority. New or re-accessed items
-receive priority $L + f^\alpha c^\beta / s$. This elegantly balances
-recency (via the clock), frequency, cost, and size in a single framework.
+receive priority $L + f^\alpha c^\beta / s$. This combines recency
+(via the clock), frequency, cost, and size in a single framework.
 
 \textbf{Hyperbolic Caching}~\cite{hyperbolic} assigns priority based on
 the ratio of cost to the product of size and time-since-last-access,
 providing a theoretically grounded approximation to Belady's optimal
 algorithm generalised for variable-size, variable-cost items.
+
+\subsection{Modern State-of-the-Art Eviction Policies}
+Beyond the classical policies above, a family of modern algorithms has
+emerged that we discuss briefly as future comparison targets.
+
+\textbf{ARC (Adaptive Replacement Cache)}~\cite{megiddo2003arc} maintains
+two LRU lists~---~one for recently-accessed items, one for
+frequently-accessed items~---~and dynamically adjusts the balance between
+them based on the observed workload. ARC self-tunes without workload-specific
+hyperparameters and dominates LRU on mixed recency/frequency workloads.
+
+\textbf{TinyLFU / W-TinyLFU}~\cite{tinylfu} combines an admission filter
+based on a Count-Min Sketch~\cite{countminsketch} frequency estimator with
+a small ``window'' LRU segment for recency. W-TinyLFU is the eviction
+policy used by the Caffeine cache library and is widely regarded as the
+current state of the art for object caches on skewed workloads.
+
+\textbf{S3-FIFO}~\cite{yang2024sosp} is a recent (SOSP~2024) FIFO-based
+policy that partitions the cache into a small ``S'' segment for
+short-lived objects and a large ``M'' segment for long-lived ones, with
+a ghost queue for demoted entries. S3-FIFO reports hit rates competitive
+with W-TinyLFU while retaining FIFO-level simplicity and lock-free
+implementability.
+
+None of these modern baselines is cost-aware: they optimise hit rate,
+not weighted hit rate. A direct empirical comparison against them is
+left as future work; asking whether GDSF's cost-awareness is worth the
+raw-hit-rate concession relative to these strong recency/frequency
+baselines is an open question our controlled results only bound
+indirectly.
+
+\subsection{Semantic Caching for LLMs}
+Semantic caching~---~returning a cached response when a new query is
+sufficiently \emph{similar} (not identical) to a prior one~---~introduces
+a second layer of eviction concerns beyond object caches.
+
+\textbf{GPTCache}~\cite{gptcache} uses a sentence-embedding index and a
+similarity threshold; entries whose embeddings occupy a densely populated
+region of the vector space are effectively redundant, since any of them
+can serve the surrounding queries.
+
+\textbf{MeanCache}~\cite{meancache}, \textbf{SCALM}~\cite{scalm}, and
+follow-up work on \textbf{GPTCache-style similarity indexing} have
+investigated when semantic hits are safe (question-answering with stable
+factual answers) versus dangerous (personalised, time-sensitive, or
+stateful queries). These works motivate a SemanticGDSF variant~---~left
+as future work~---~that would add an embedding-density term to the
+GDSF priority so that redundant entries in dense neighbourhoods are
+preferentially evicted.
 
 \subsection{Cost-Aware Caching Theory}
 The theoretical foundations for cost-aware caching originate from the
@@ -361,22 +422,24 @@ class GDSFEviction(EvictionBase):
 
 \subsection{Workload Design}
 We evaluate across six synthetic workload types, each comprising
-$10{,}000$ queries. Cache size is swept across $\{5\text{k}, 10\text{k},
-25\text{k}, 50\text{k}\}$ entries so we can see how each policy's
+$10{,}000$ queries. Cache size is swept across $\{50\text{k}, 100\text{k},
+250\text{k}, 500\text{k}\}$ bytes so we can see how each policy's
 advantage scales with available capacity.
 \begin{enumerate}[leftmargin=1.4em]
   \item \textbf{Uniform Cost:} All queries have identical cost (\$0.05).
         Control condition~---~cost-aware policies should offer no
         advantage.
-  \item \textbf{High-Variance Cost:} Costs drawn from a log-normal with
-        mean~\$0.05 and stdev~\$0.04.
-  \item \textbf{Zipf Popularity:} Popularity follows Zipf ($s=1.2$) with
+  \item \textbf{High-Variance Cost:} Costs drawn from a trimodal mixture
+        (cheap / medium / expensive tiers) so that a small number of
+        very expensive items coexist with many cheap ones.
+  \item \textbf{Zipf Popularity:} Popularity follows Zipf ($s=2.0$) with
         heterogeneous costs.
   \item \textbf{Bursty Access:} Temporal bursts followed by dormancy.
   \item \textbf{Adversarial (Anti-LRU):} Sequential scan interleaved with
         periodic hits on high-cost anchor items.
-  \item \textbf{Size-Varying:} Response sizes span $10\times$
-        ($100$--$1000$ tokens); cost scales sub-linearly with size.
+  \item \textbf{Size-Varying:} Response sizes span $1000\times$
+        ($50$\,B--$50$\,kB per entry via a clipped log-normal); cost
+        scales sub-linearly with size.
 \end{enumerate}
 
 \subsection{Metrics}
@@ -429,26 +492,20 @@ $3{,}600$ experiments total: $5$~policies $\times$ $6$~workloads $\times$
 $4$~cache sizes $\times$ $30$~seeds). Per-workload tables aggregate across
 all four cache sizes, so each cell is a mean over $n=120$ runs
 ($30$ seeds $\times$ $4$ cache sizes). Statistical tests follow
-Section~\ref{sec:stats-method}. Per-cache-size trajectories are shown in
-Figure~\ref{fig:hitrate-vs-size} and Figure~\ref{fig:cwhr-vs-size}.
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.98\linewidth]{fig1_hit_rate_vs_cache_size.pdf}
-  \caption{Hit rate vs.\ cache size across all workloads and policies. On
-           homogeneous workloads (\texttt{uniform\_cost},
-           \texttt{zipf\_variable\_cost}) all policies overlap; on
-           heterogeneous workloads GDSF diverges upward as capacity grows.}
-  \label{fig:hitrate-vs-size}
-\end{figure}
+Section~\ref{sec:stats-method}. Per-cache-size cost-weighted-hit-rate
+trajectories are shown in Figure~\ref{fig:cwhr-vs-size}; per-workload raw
+hit rate numbers are reported in the tables below (e.g.\ Table~\ref{tab:highvar}).
 
 \begin{figure}[t]
   \centering
   \includegraphics[width=0.98\linewidth]{fig2_cwhr_vs_cache_size.pdf}
-  \caption{Cost-weighted hit rate vs.\ cache size. GDSF opens a visible
-           gap over LRU/FIFO on \texttt{high\_variance\_cost},
-           \texttt{bursty}, \texttt{adversarial\_lru}, and
-           \texttt{size\_varying}.}
+  \caption{Cost-weighted hit rate vs.\ cache size on
+           \texttt{high\_variance\_cost}. All five policies are shown
+           (LRU, LFU, FIFO, Random, GDSF); the LRU/LFU/FIFO/Random
+           curves overlap almost exactly (visible as the single upper
+           gray line), while GDSF (red) is clearly separated below on
+           raw hit rate but wins on cost-weighted hit rate at every
+           cache size---the intended trade-off of the policy.}
   \label{fig:cwhr-vs-size}
 \end{figure}
 
@@ -483,6 +540,22 @@ $[+0.1024, +0.1358]$, paired~$t = 13.85$, $p_{\text{Bonf}} =
 8.6\!\times\!10^{-26}$), and dollar savings rise from \$142.95 to
 \$179.67~---~a \textbf{$+25.7\%$ improvement}. This is the whole thesis of
 cost-aware eviction in one row: fewer hits, worth more each.
+Figure~\ref{fig:dollar-savings} visualises the per-policy dollar savings
+side by side.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig3_dollar_savings.pdf}
+  \caption{Dollar savings per $1{,}000$ queries at cache size
+           $=100{,}000$ bytes on the \texttt{high\_variance\_cost}
+           workload, broken down by eviction policy. LRU, LFU, FIFO,
+           and Random cluster near \$74; GDSF pulls ahead to \$120.83,
+           reflecting its preference for retaining expensive entries
+           even when they are not the most recently accessed.
+           (Computed from \texttt{benchmark\_results\_20260721\_191113.json},
+           30 seeds per policy at this cache size.)}
+  \label{fig:dollar-savings}
+\end{figure}
 
 %% -- 5.2 Bursty --------------------------------------------------------------
 \subsection{Bursty Workload}
@@ -599,7 +672,7 @@ game.
 By design, when every item costs the same, cost-aware ranking has nothing
 to grip on. All five policies land within $0.03\%$ of each other. The
 paired difference is not statistically significant
-($\Delta\text{CWHR} = +0.00003$, $95\%$ BCa~CI $[-0.0004, +0.0005]$,
+($\Delta\text{CWHR} = +0.00002$, $95\%$ BCa~CI $[-0.0004, +0.0005]$,
 paired~$t = 0.09$, $p_{\text{Bonf}} = 1.00$). This is the sanity check:
 GDSF does not underperform on cost-uniform traffic~---~it just doesn't
 help.
@@ -636,13 +709,13 @@ shouldn't hurt when the cache is over-provisioned, and it doesn't.
 %% -- 5.7 Latency -------------------------------------------------------------
 \subsection{Latency and Throughput}
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.95\linewidth]{fig4_latency_cdf.pdf}
-  \caption{Latency CDF (log-scale) per policy, aggregated across all
-           workloads.}
-  \label{fig:latency-cdf}
-\end{figure}
+Tables~\ref{tab:highvar}--\ref{tab:zipf} together summarise cost-weighted
+hit rate across all six workload families evaluated in
+Sections~\ref{sec:results}.1--\ref{sec:results}.6. GDSF diverges from
+the recency/frequency baselines on workloads with heterogeneous costs
+and bursty access (Tables~\ref{tab:bursty} and~\ref{tab:sizevar}),
+and converges to them under uniform-cost or over-provisioned
+conditions (Tables~\ref{tab:uniform} and~\ref{tab:zipf}).
 
 \begin{table}[t]
   \centering
@@ -653,23 +726,25 @@ shouldn't hurt when the cache is over-provisioned, and it doesn't.
     \toprule
     Policy  & p50 ($\mu$s) & p95 ($\mu$s) & Ops/s & Memory/entry \\
     \midrule
-    LRU     & 1.6 & 3.4    & 250{,}603 & 56\,B \\
-    FIFO    & 1.4 & 3.3    & 265{,}726 & 56\,B \\
-    LFU     & 21.2 & 181.0 &  99{,}361 & 56\,B \\
-    Random  & 3.3 & 15.8   & 188{,}012 & 56\,B \\
-    \textbf{GDSF} & \textbf{11.0} & \textbf{27.1} & \textbf{57{,}882} & \textbf{56\,B} \\
+    LRU     & 1.57  & 3.43   & 250{,}603 & 56\,B \\
+    FIFO    & 1.39  & 3.30   & 265{,}726 & 56\,B \\
+    LFU     & 21.21 & 181.01 &  99{,}361 & 56\,B \\
+    Random  & 3.29  & 15.82  & 188{,}012 & 56\,B \\
+    \textbf{GDSF} & \textbf{10.97} & \textbf{27.10} & \textbf{57{,}882} & \textbf{56\,B} \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-GDSF is $\sim7\times$ slower per operation than LRU at the median and
-$\sim8\times$ slower at p95, but the absolute cost
-($\sim11\,\mu\text{s}$ median, $\sim27\,\mu\text{s}$ p95) is dwarfed by
-any real LLM call ($100\,\text{ms}$--$5\,\text{s}$ of network~+~inference).
+GDSF is $\sim 7\times$ slower per operation than LRU at the median and
+$\sim 8\times$ slower at p95, but the absolute cost
+($\sim 11\,\mu\text{s}$ median, $\sim 27\,\mu\text{s}$ p95) is dwarfed
+by any real LLM call ($100\,\text{ms}$--$5\,\text{s}$ of network~+~inference).
 At $58$k~ops/s the eviction manager is nowhere near a bottleneck for a
 real chat service. Memory overhead is identical across policies at this
 configuration because each policy stores the same
-\texttt{EntryMetadata} record.
+\texttt{EntryMetadata} record (56~B/entry; see the ``Memory/entry''
+column of Table~\ref{tab:latency}), so cost-awareness is obtained
+without a memory penalty.
 
 %% -- 5.8 Sensitivity --------------------------------------------------------
 \subsection{Sensitivity to Parameters}
@@ -678,21 +753,233 @@ configuration because each policy stores the same
   \centering
   \includegraphics[width=0.95\linewidth]{fig5_ablation_heatmap.pdf}
   \caption{Ablation heatmap of CWHR across the $\alpha \times \beta$ grid
-           for each workload.}
+           on the high-variance-cost workload. CWHR is essentially flat
+           across the grid (range $1.3$--$1.6\%$), indicating that the
+           policy is robust to hyperparameter choice within reasonable
+           ranges. Best cell: $(\alpha, \beta) = (2.0, 0.8)$ at $1.6\%$;
+           default $(1.0, 1.0)$ at $1.5\%$ (${\sim}10\%$ below best).}
   \label{fig:ablation}
 \end{figure}
 
 We swept $\alpha \in \{0.5, 0.8, 1.0, 1.2, 1.5, 2.0\}$ and
-$\beta \in \{0.5, 0.8, 1.0, 1.2, 1.5, 2.0\}$ on each workload. On the
-workloads where GDSF wins (high-variance, bursty, adversarial,
-size-varying), the default $(\alpha, \beta) = (1.0, 1.0)$ is within
-$\sim5\%$ of the best point on the grid. On uniform-cost and
-Zipf-when-cache-fits, the grid is essentially flat.
+$\beta \in \{0.5, 0.8, 1.0, 1.2, 1.5, 2.0\}$ on the high-variance-cost
+workload (36 configurations $\times$ 10 seeds each; see
+\texttt{results/ablation/ablation\_results.csv}).
+The best grid point was $(\alpha, \beta) = (2.0, 0.8)$;
+the default $(\alpha, \beta) = (1.0, 1.0)$ trailed the best by
+$\sim 10\%$ of CWHR. Absolute CWHR moved only within
+$[0.013, 0.016]$ across the whole grid at this cache
+size, i.e.\ the ranking is stable and no cell was catastrophically
+worse than the default.
+Figure~\ref{fig:param-sensitivity} slices the ablation along the two
+axes independently, holding the other exponent at $1.0$; both curves are
+gently unimodal near the default and change slowly.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.98\linewidth]{fig8_parameter_sensitivity.pdf}
+  \caption{Parameter sensitivity of GDSF. Left: CWHR as a function of the
+           frequency exponent $\alpha$ with $\beta$ fixed at $1.0$.
+           Right: CWHR as a function of the cost exponent
+           $\beta$ with $\alpha$ fixed at $1.0$. The dashed line marks
+           the default $(\alpha,\beta) = (1.0, 1.0)$. Error bars are
+           large relative to the mean, confirming that CWHR is largely
+           insensitive to $\alpha$ and $\beta$ around the default; the
+           mild upward trend in $\alpha$ (left panel) hints at a slight
+           preference for $\alpha > 1$ but stays within noise.}
+  \label{fig:param-sensitivity}
+\end{figure}
 
 Practical guidance: leave $\alpha = \beta = 1.0$ unless you have concrete
 evidence that your workload benefits from tilting toward frequency
 ($\alpha > \beta$) or toward cost ($\beta > \alpha$).
 
+\iffalse  % Sections below are pending H1..H7 and are excluded from this submission.
+%% ============================================================================
+\section{Real-Trace Evaluation}
+\label{sec:realtrace}
+
+\textbf{[NOTE: this section pending H1 (LMSys ingestion), H2 (ShareGPT
+ingestion), and H3 (replay methodology) completion. Figures
+\texttt{fig\_master\_1} and \texttt{fig\_master\_2} are not yet produced
+in \texttt{results/plots\_master/}; the numeric summary below will be
+populated from \texttt{results/master\_grid/stats\_all.json} once H8
+finalises the master benchmark grid. See
+\texttt{docs/H10\_REPORT\_CHANGELOG.md} for tracking.]}
+
+The controlled-workload results in Section~\ref{sec:results} demonstrate
+that GDSF behaves as predicted when each axis of the priority function is
+isolated. To assess external validity we plan to replay two publicly
+available LLM query traces:
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{LMSys-Chat-1M}~---~a $\sim 1$M-conversation trace from the
+        LMSys Chatbot Arena with model identity, prompt/response tokens,
+        and timestamps, ingested by pipeline~H1.
+  \item \textbf{ShareGPT}~---~a community-collected ChatGPT conversation
+        corpus used as an independent workload with a different topical
+        distribution, ingested by pipeline~H2.
+\end{itemize}
+Both traces are converted to a common event schema and replayed via the
+harness in pipeline~H3, so that the same eviction implementations used in
+Section~\ref{sec:results} run against real user traffic rather than
+synthetic distributions.
+
+\paragraph{Placeholder results.} Once the upstream pipelines land,
+two figures (planned labels \texttt{fig:master-realtrace-1} and
+\texttt{fig:master-realtrace-2}) will show, respectively, the CWHR
+trajectory per policy on LMSys and on ShareGPT, and the $\Delta$CWHR of
+GDSF over each baseline with BCa $95\%$ confidence intervals. This
+report will \emph{not} state any numeric win/loss on real traces until
+the H8 stats JSON is available.
+
+%% Figure stubs (kept commented until fig_master_{1,2}.pdf exist)
+% \begin{figure}[t]
+%   \centering
+%   \includegraphics[width=0.98\linewidth]{fig_master_1.pdf}
+%   \caption{[pending] Real-trace CWHR per policy on LMSys-Chat-1M.}
+%   \label{fig:master-realtrace-1}
+% \end{figure}
+%
+% \begin{figure}[t]
+%   \centering
+%   \includegraphics[width=0.98\linewidth]{fig_master_2.pdf}
+%   \caption{[pending] Real-trace CWHR per policy on ShareGPT.}
+%   \label{fig:master-realtrace-2}
+% \end{figure}
+
+%% ============================================================================
+\section{Comparison to State-of-the-Art Baselines}
+\label{sec:sota}
+
+\textbf{[NOTE: this section pending H4 (W-TinyLFU~/~ARC~/~S3-FIFO
+implementations and comparative benchmark run). Figure
+\texttt{fig\_master\_3} (advisor-critical) is not yet produced. Numeric
+claims below are placeholders and will resolve to
+\texttt{results/master\_grid/stats\_all.json}.]}
+
+The classical baselines used in Section~\ref{sec:results} (LRU, FIFO,
+LFU, Random) predate the modern caching literature. A fair master's-level
+evaluation must ask whether GDSF's cost-awareness still pays off when
+compared to policies that are themselves designed to beat LRU on skewed
+workloads. Pipeline~H4 adds three such baselines:
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{W-TinyLFU}~\cite{tinylfu}~---~admission filtering by
+        Count-Min-Sketch~\cite{countminsketch} frequency plus a small
+        LRU window.
+  \item \textbf{ARC}~\cite{megiddo2003arc}~---~adaptive balance between
+        recency and frequency segments.
+  \item \textbf{S3-FIFO}~\cite{yang2024sosp}~---~small/main FIFO
+        segments with ghost-queue promotion.
+\end{itemize}
+
+\paragraph{Placeholder table.} Once H4 lands, a table analogous to
+Table~\ref{tab:highvar} will be added showing hit rate, CWHR, and dollar
+savings for each of the seven policies (five original + three modern
+baselines) on each real trace, with paired $t$-tests and
+Bonferroni-corrected $p$-values against GDSF. The advisor-critical
+figure~\texttt{fig\_master\_3} will visualise the CWHR gap between GDSF
+and each modern baseline as a function of cache size.
+
+\paragraph{Expected story.} The honest hypothesis~---~stated up front so
+it can be falsified~---~is that \emph{W-TinyLFU may match or beat GDSF
+on raw hit rate on real traces, but GDSF should retain a cost-savings
+advantage on cost-heterogeneous segments}. If the real-trace evaluation
+refutes this, the paper will report the refutation.
+
+%% ============================================================================
+\section{Semantic-Aware Cost-Aware Eviction: SemanticGDSF}
+\label{sec:semgdsf}
+
+\textbf{[NOTE: this section pending H5 (SemanticGDSF implementation and
+ablation). Figure \texttt{fig\_master\_4} not yet produced.]}
+
+Semantic caches differ from object caches in one critical way: two
+entries can be \emph{semantically redundant} even though they have
+different keys. Evicting one of a pair of near-duplicates loses no
+information (the surviving twin will absorb the future traffic), while
+evicting the sole occupant of an isolated region of embedding space
+loses coverage.
+
+SemanticGDSF extends the priority function of
+Equation~\ref{eq:gdsf} with an embedding-density penalty~$\rho(i)$:
+\begin{equation}
+  \text{Priority}_{\text{sem}}(i) \;=\; L \;+\; \frac{\text{freq}(i)^{\alpha} \cdot \text{cost}(i)^{\beta}}{\text{size}(i) \cdot (1 + \gamma \, \rho(i))},
+  \label{eq:semgdsf}
+\end{equation}
+where $\rho(i)$ is a local density estimate (e.g., number of neighbours
+within radius $\varepsilon$ in the embedding space) and $\gamma \ge 0$
+controls the strength of the redundancy penalty. Setting $\gamma = 0$
+recovers standard GDSF. The design and its ablation over $\gamma$ will
+be produced by pipeline~H5.
+
+\paragraph{Failure modes to discuss.} SemanticGDSF is expected to fail
+gracefully but not uniformly:
+(a)~queries in dense but distinctive clusters (e.g., popular FAQs) may be
+over-evicted if $\gamma$ is too large;
+(b)~an outdated embedding model can misestimate density;
+(c)~stateful queries whose ``correct'' answer differs across users can
+be silently merged. Section~\ref{sec:discuss} will inherit these
+caveats once H5's ablation is available.
+
+%% ============================================================================
+\section{Formal Analysis}
+\label{sec:theory}
+
+\textbf{[NOTE: this section pending H6 (formal theoretical contribution).
+When ready, this section will be filled by \texttt{\textbackslash input\{sections/theory.tex\}}
+from H6's output. Placeholder scaffolding follows so downstream sections
+can reference the intended contents.]}
+
+The intended contents are:
+\begin{itemize}[leftmargin=1.4em]
+  \item A restatement of the weighted-caching competitive-ratio result
+        of Cao et al.~\cite{cao1997costaware} adapted to the GDSF form
+        used in this paper.
+  \item An analysis of the clock-inflation invariant
+        ($L_{t+1} \ge L_t$) as a source of implicit aging.
+  \item A discussion of how the size term $s_i$ interacts with the
+        competitive-ratio bound when sizes span multiple orders of
+        magnitude, tying back to the size-varying results in
+        Table~\ref{tab:sizevar}.
+  \item Assumptions and limitations of the analysis, which are merged
+        into the ``Threats to Validity'' subsection of
+        Section~\ref{sec:discuss}.
+\end{itemize}
+
+% \input{sections/theory.tex}  %% will be enabled once H6 lands
+
+%% ============================================================================
+\section{Robustness Studies}
+\label{sec:robustness}
+
+\textbf{[NOTE: this section pending H7 (robustness experiments). Figures
+\texttt{fig\_master\_5}, \texttt{fig\_master\_6}, \texttt{fig\_master\_7}
+not yet produced.]}
+
+A master's-level evaluation must ask not only ``does GDSF win under ideal
+conditions?'' but also ``does it degrade gracefully under realistic
+perturbations?'' Pipeline~H7 will produce three studies:
+\begin{enumerate}[leftmargin=1.4em]
+  \item \textbf{Cost-noise sensitivity} (\texttt{fig\_master\_5}):
+        multiplicative log-normal noise is added to the estimated
+        per-entry cost before it enters the GDSF priority; CWHR is
+        measured as noise variance grows.
+  \item \textbf{Distribution shift} (\texttt{fig\_master\_6}): the
+        replay is split into two halves with a topical or cost-mix shift
+        between them, testing how quickly each policy adapts.
+  \item \textbf{Cold-start convergence} (\texttt{fig\_master\_7}): CWHR
+        is tracked as a function of the number of queries seen from a
+        fresh (empty) cache, to quantify warm-up time.
+\end{enumerate}
+
+\paragraph{Placeholder claim.} We expect GDSF's advantage to
+\emph{diminish} but not vanish under moderate cost noise (up to
+$\sigma \approx 0.5$ log-space) and to trail behind adaptive baselines
+(ARC, W-TinyLFU) under abrupt distribution shift. Concrete numbers will
+be reported once H7 produces them.
+
+
+\fi  % end of pending H1..H7 sections
 %% ============================================================================
 \section{Discussion}
 \label{sec:discuss}
@@ -750,19 +1037,70 @@ savings. \emph{When LRU suffices:} uniform-cost, uniform-size traffic.
 configuration changes; monitor CWHR alongside hit rate to validate cost
 savings.
 
+\subsection{Limitations and Threats to Validity}
+\label{sec:threats}
+We separate limitations that follow from the current pipeline scope from
+those that would apply even to a fully executed master's-level study.
+
+\paragraph{Scope limitations (fixable by finishing H1--H9).}
+The controlled-workload evaluation is synthetic. A real-trace evaluation
+(LMSys / ShareGPT), a direct comparison against modern baselines
+(W-TinyLFU, ARC, S3-FIFO), a semantic-aware variant, formal analysis,
+and robustness studies remain future work. Every extension is enumerated
+in \texttt{docs/H10\_REPORT\_CHANGELOG.md}.
+
+\paragraph{Threats to internal validity.}
+(1)~All controlled-workload numbers derive from a single benchmark run
+(\texttt{results/benchmark\_results\_20260721\_191113.json}) with 30
+seeds; a second, independent run has not been executed.
+(2)~The paired $t$-test assumes approximate normality of paired
+differences; we mitigate this with BCa bootstrap CIs, but heavy-tailed
+runs could still bias the point estimate.
+(3)~Bonferroni correction across six workloads may be over-conservative;
+we report raw and corrected $p$-values so the reader can adjust.
+
+\paragraph{Threats to external validity.}
+(1)~Synthetic workloads were designed to isolate each GDSF axis; they may
+overstate the size of the effect that a real workload would exhibit.
+(2)~Cost is estimated from token counts and public price sheets; actual
+provider invoices may embed additional fees not modelled here.
+(3)~Results are collected on a single machine configuration
+(Section~\ref{sec:setup}); production cache deployments with concurrent
+readers and writers may see different latency profiles.
+
+\paragraph{Threats to construct validity.}
+(1)~CWHR is our chosen figure of merit; a service optimising for
+end-user latency rather than dollar cost may prefer a different metric.
+(2)~The dollar-savings numbers depend on the specific pricing schedule
+in force at the time of benchmarking; absolute values will drift with
+provider price changes.
+
 %% ============================================================================
 \section{Conclusion and Future Work}
 \label{sec:conclude}
 
 We presented a cost-aware eviction policy for LLM response caches based
-on the Greedy-Dual-Size-Frequency algorithm. Across six workloads and
-four cache sizes, our approach achieves significantly better
-cost-efficiency than traditional policies on heterogeneous workloads:
-\textbf{$+25.7\%$} dollar savings on high-variance-cost, \textbf{$+32.3\%$}
-on bursty, \textbf{$+91.0\%$} on size-varying, and \textbf{$+18.8\%$} on
-anti-LRU adversarial (all Bonferroni-corrected $p<10^{-7}$), with
-\emph{no degradation} on uniform-cost or Zipf-when-cache-fits, and modest
-overhead ($\sim11\,\mu$s median~/~$\sim27\,\mu$s p95 per operation).
+on the Greedy-Dual-Size-Frequency algorithm. Across six \emph{controlled}
+workloads and four cache sizes, our approach achieves significantly
+better cost-efficiency than traditional policies on heterogeneous
+workloads: \textbf{$+25.7\%$} dollar savings on high-variance-cost,
+\textbf{$+32.3\%$} on bursty, \textbf{$+91.0\%$} on size-varying, and
+\textbf{$+18.8\%$} on anti-LRU adversarial (all Bonferroni-corrected
+$p<10^{-7}$), with \emph{no practically meaningful degradation} on
+uniform-cost or Zipf-when-cache-fits, and modest overhead
+($\sim 11\,\mu\text{s}$ median~/~$\sim 27\,\mu\text{s}$ p95 per operation).
+
+\paragraph{Honest scope statement.}
+These wins are established on synthetic workloads that were designed to
+isolate each axis of the priority function. The master's-level story we
+intend to tell~---~and which is scaffolded as future work~---~is more
+nuanced: GDSF should retain a \emph{cost-savings-per-dollar} advantage
+on real cost-heterogeneous traces, but it may lose to W-TinyLFU on raw
+hit rate on skewed workloads whose head fits in cache, and a
+SemanticGDSF variant would open a distinct axis (embedding-density
+penalisation) that is orthogonal to what any prior policy exploits.
+Whether these hypotheses survive contact with the LMSys and ShareGPT
+traces is the empirical question that pipelines~H1--H8 will answer.
 
 \paragraph{Future work.}
 \emph{Adaptive parameters} via multi-armed bandit tuning on a sliding

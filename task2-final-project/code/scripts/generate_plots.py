@@ -52,6 +52,7 @@ POLICY_COLORS = {
     "LRU": "#1f77b4",
     "LFU": "#ff7f0e",
     "FIFO": "#2ca02c",
+    "Random": "#888888",
     "GDSF": "#d62728",
 }
 
@@ -59,10 +60,14 @@ POLICY_MARKERS = {
     "LRU": "o",
     "LFU": "s",
     "FIFO": "^",
+    "Random": "x",
     "GDSF": "D",
 }
 
-POLICY_ORDER = ["LRU", "LFU", "FIFO", "GDSF"]
+POLICY_ORDER = ["LRU", "LFU", "FIFO", "Random", "GDSF"]
+
+# Toggled from main() via --allow-synthetic flag.
+_ALLOW_SYNTHETIC = False
 
 
 def load_benchmark_data(input_dir: str) -> pd.DataFrame:
@@ -86,6 +91,10 @@ def load_benchmark_data(input_dir: str) -> pd.DataFrame:
         return pd.concat(all_data, ignore_index=True)
 
     # Generate synthetic data for demonstration if no real data exists
+    if not _ALLOW_SYNTHETIC:
+        print("[FATAL] No benchmark data found and --allow-synthetic not set. "
+              "Refusing to fabricate results.", file=sys.stderr)
+        sys.exit(1)
     print("[WARN] No benchmark data found. Generating synthetic demonstration data.")
     return generate_synthetic_data()
 
@@ -152,6 +161,10 @@ def load_ablation_data(input_dir: str) -> pd.DataFrame:
         return pd.read_csv(ablation_file)
 
     # Generate synthetic ablation data
+    if not _ALLOW_SYNTHETIC:
+        print("[FATAL] No ablation data found and --allow-synthetic not set. "
+              "Refusing to fabricate ablation results.", file=sys.stderr)
+        sys.exit(1)
     print("[WARN] No ablation data found. Generating synthetic demonstration data.")
     np.random.seed(123)
 
@@ -200,7 +213,7 @@ def plot_hit_rate_vs_cache_size(df: pd.DataFrame, output_dir: str) -> None:
             capsize=3,
         )
 
-    ax.set_xlabel("Cache Size (entries)")
+    ax.set_xlabel("Cache Size (bytes)")
     ax.set_ylabel("Hit Rate (%)")
     ax.set_title("Hit Rate vs Cache Size (high_variance_cost workload)")
     ax.legend(loc="lower right", framealpha=0.9)
@@ -237,7 +250,7 @@ def plot_cwhr_vs_cache_size(df: pd.DataFrame, output_dir: str) -> None:
             capsize=3,
         )
 
-    ax.set_xlabel("Cache Size (entries)")
+    ax.set_xlabel("Cache Size (bytes)")
     ax.set_ylabel("Cost-Weighted Hit Rate (%)")
     ax.set_title("Cost-Weighted Hit Rate vs Cache Size")
     ax.legend(loc="lower right", framealpha=0.9)
@@ -256,8 +269,8 @@ def plot_dollar_savings(df: pd.DataFrame, output_dir: str) -> None:
     """Figure 3: Dollar savings comparison (bar chart)."""
     fig, ax = plt.subplots(figsize=(8, 5))
 
-    # Use cache_size=1000, high_variance_cost workload
-    subset = df[(df["cache_size"] == 1000) & (df["workload"] == "high_variance_cost")]
+    # Use cache_size=100000 (bytes), high_variance_cost workload
+    subset = df[(df["cache_size"] == 100000) & (df["workload"] == "high_variance_cost")]
     savings = subset.groupby("policy")["savings_dollar"].agg(["mean", "std"]).reset_index()
     savings = savings.set_index("policy").loc[POLICY_ORDER].reset_index()
 
@@ -286,7 +299,7 @@ def plot_dollar_savings(df: pd.DataFrame, output_dir: str) -> None:
 
     ax.set_xlabel("Eviction Policy")
     ax.set_ylabel("Dollar Savings per 1K Queries ($)")
-    ax.set_title("Cost Savings Comparison (cache_size=1000)")
+    ax.set_title("Cost Savings Comparison (cache_size=100000 bytes)")
     ax.set_ylim(bottom=0)
 
     plt.tight_layout()
@@ -302,7 +315,7 @@ def plot_latency_cdf(df: pd.DataFrame, output_dir: str) -> None:
     """Figure 4: Latency CDF comparing LRU (vanilla) vs GDSF (enhanced)."""
     fig, ax = plt.subplots(figsize=(8, 5))
 
-    subset = df[(df["cache_size"] == 1000) & (df["workload"] == "high_variance_cost")]
+    subset = df[(df["cache_size"] == 100000) & (df["workload"] == "high_variance_cost")]
 
     for policy in ["LRU", "GDSF"]:
         latencies = subset[subset["policy"] == policy]["latency_ms"].values
@@ -382,8 +395,8 @@ def plot_workload_sensitivity(df: pd.DataFrame, output_dir: str) -> None:
     """Figure 6: Grouped bar chart of CWHR across workloads."""
     fig, ax = plt.subplots(figsize=(10, 5))
 
-    # Use cache_size=1000
-    subset = df[df["cache_size"] == 1000]
+    # Use cache_size=100000 (bytes)
+    subset = df[df["cache_size"] == 100000]
     grouped = subset.groupby(["workload", "policy"])["cwhr"].mean().reset_index()
 
     workloads = sorted(grouped["workload"].unique())
@@ -408,7 +421,7 @@ def plot_workload_sensitivity(df: pd.DataFrame, output_dir: str) -> None:
 
     ax.set_xlabel("Workload Type")
     ax.set_ylabel("Cost-Weighted Hit Rate (%)")
-    ax.set_title("Workload Sensitivity Analysis (cache_size=1000)")
+    ax.set_title("Workload Sensitivity Analysis (cache_size=100000 bytes)")
     ax.set_xticks(x)
     ax.set_xticklabels([w.replace("_", "\n") for w in workloads], fontsize=9)
     ax.legend(loc="upper left", framealpha=0.9)
@@ -442,7 +455,7 @@ def plot_memory_overhead(df: pd.DataFrame, output_dir: str) -> None:
             linewidth=2,
         )
 
-    ax.set_xlabel("Cache Size (entries)")
+    ax.set_xlabel("Cache Size (bytes)")
     ax.set_ylabel("Memory Usage (MB)")
     ax.set_title("Memory Overhead Comparison")
     ax.legend(loc="upper left", framealpha=0.9)
@@ -522,7 +535,16 @@ def main():
         default="results/plots",
         help="Directory to save generated plots.",
     )
+    parser.add_argument(
+        "--allow-synthetic",
+        action="store_true",
+        help="Allow silent synthetic-data fallback when CSVs are missing. "
+             "Default: fail loudly if real data is not present.",
+    )
     args = parser.parse_args()
+
+    global _ALLOW_SYNTHETIC
+    _ALLOW_SYNTHETIC = args.allow_synthetic
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)

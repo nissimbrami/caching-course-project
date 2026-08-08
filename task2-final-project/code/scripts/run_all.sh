@@ -8,7 +8,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
 # Configuration (override via environment variables)
-CACHE_SIZE="${CACHE_SIZE:-1000}"
+CACHE_SIZE="${CACHE_SIZE:-10000}"
 NUM_RUNS="${NUM_RUNS:-10}"
 OUTPUT_DIR="${OUTPUT_DIR:-results}"
 
@@ -43,7 +43,7 @@ print_error() {
 mkdir -p "$OUTPUT_DIR/benchmarks" "$OUTPUT_DIR/plots" "$OUTPUT_DIR/ablation"
 
 # ─── Step 1: Run Unit Tests ─────────────────────────────────────────────────────
-print_header "Step 1/4: Running Unit Tests"
+print_header "Step 1/6: Running Unit Tests"
 
 if python -m pytest tests/ -v --tb=short --cov=src --cov-report=term-missing 2>&1; then
     print_success "All unit tests passed."
@@ -52,7 +52,7 @@ else
 fi
 
 # ─── Step 2: Run Full Benchmark Suite ───────────────────────────────────────────
-print_header "Step 2/4: Running Full Benchmark Suite"
+print_header "Step 2/6: Running Full Benchmark Suite"
 
 echo "Configuration:"
 echo "  Cache size: $CACHE_SIZE"
@@ -66,8 +66,24 @@ python -m benchmarks.run_all \
 
 print_success "Benchmarks complete. Results saved to $OUTPUT_DIR/benchmarks/"
 
-# ─── Step 3: Run Ablation Study ─────────────────────────────────────────────────
-print_header "Step 3/4: Running Ablation Study (alpha x beta sweep)"
+# ─── Step 3: Compute Statistics (paired-t, BCa CI, Bonferroni) ──────────────────
+print_header "Step 3/6: Computing Statistics"
+
+LATEST_JSON="$(ls -t "$OUTPUT_DIR/benchmarks"/benchmark_results_*.json 2>/dev/null | head -1)"
+if [ -z "$LATEST_JSON" ]; then
+    LATEST_JSON="$(ls -t "$OUTPUT_DIR"/benchmark_results_*.json 2>/dev/null | head -1)"
+fi
+if [ -n "$LATEST_JSON" ]; then
+    STATS_OUT="$OUTPUT_DIR/stats_$(date +%Y%m%d_%H%M%S).json"
+    python scripts/compute_statistics.py --input "$LATEST_JSON" --output "$STATS_OUT" \
+        && print_success "Statistics saved to $STATS_OUT" \
+        || print_warning "compute_statistics.py failed"
+else
+    print_warning "No benchmark JSON found; skipping stats."
+fi
+
+# ─── Step 4: Run Ablation Study ─────────────────────────────────────────────────
+print_header "Step 4/6: Running Ablation Study (alpha x beta sweep)"
 
 python scripts/run_ablation.py \
     --cache-size "$CACHE_SIZE" \
@@ -76,8 +92,8 @@ python scripts/run_ablation.py \
 
 print_success "Ablation study complete. Results saved to $OUTPUT_DIR/ablation/"
 
-# ─── Step 4: Generate Plots ─────────────────────────────────────────────────────
-print_header "Step 4/4: Generating Publication-Quality Plots"
+# ─── Step 5: Generate Plots ─────────────────────────────────────────────────────
+print_header "Step 5/6: Generating Publication-Quality Plots"
 
 python scripts/generate_plots.py \
     --input-dir "$OUTPUT_DIR" \
@@ -117,3 +133,15 @@ echo "  Plot images:    $(find "$OUTPUT_DIR/plots" -name "*.png" 2>/dev/null | w
 echo ""
 
 print_success "All tasks completed. Results are in $OUTPUT_DIR/"
+
+# ─── Step 6: Build report PDF (LaTeX) ───────────────────────────────────────────
+print_header "Step 6/6: Building report PDF"
+if command -v pdflatex >/dev/null 2>&1; then
+    (cd "$PROJECT_DIR/../report-latex" \
+        && pdflatex -interaction=nonstopmode report.tex >/dev/null 2>&1 \
+        && pdflatex -interaction=nonstopmode report.tex >/dev/null 2>&1) \
+      && print_success "report.pdf rebuilt" \
+      || print_warning "pdflatex failed; check report-latex/report.log"
+else
+    print_warning "pdflatex not available; skipping PDF build"
+fi

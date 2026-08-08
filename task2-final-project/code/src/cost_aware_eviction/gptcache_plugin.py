@@ -86,7 +86,7 @@ class GDSFEvictionPlugin(EvictionBase):
 
     def __init__(
         self,
-        max_size: int = 1024 * 1024 * 100,
+        maxsize: int = 1024 * 1024 * 100,
         alpha: float = 1.0,
         beta: float = 1.0,
         config: Optional[GDSFConfig] = None,
@@ -98,7 +98,7 @@ class GDSFEvictionPlugin(EvictionBase):
         """Initialize the GDSF eviction plugin.
 
         Args:
-            max_size: Maximum cache size in bytes.
+            maxsize: Maximum cache size in bytes.
             alpha: Frequency weight exponent.
             beta: Cost weight exponent.
             config: Optional full GDSF configuration.
@@ -110,8 +110,12 @@ class GDSFEvictionPlugin(EvictionBase):
             default_entry_cost: Default entry cost when metadata is unavailable.
             **kwargs: Additional keyword arguments (for GPTCache compatibility).
         """
+        # Accept legacy 'max_size' spelling for backwards compat
+        if "max_size" in kwargs:
+            maxsize = kwargs.pop("max_size")
+        self.max_size = maxsize
         self._manager = GDSFEvictionManager(
-            max_size=max_size, alpha=alpha, beta=beta, config=config
+            max_size=maxsize, alpha=alpha, beta=beta, config=config
         )
         self._cost_estimator = CostEstimator(config=config or GDSFConfig())
         self._metadata_callback = metadata_callback
@@ -201,19 +205,30 @@ class GDSFEvictionPlugin(EvictionBase):
         Args:
             objs: List of cache keys being added.
         """
+        if isinstance(objs, str):
+            raise TypeError(
+                "objs must be List[Any], not str; got a str which would be "
+                "iterated character-by-character. Wrap single keys in a list."
+            )
         for key in objs:
             size, cost = self._get_metadata(key)
             evicted = self._manager.put(key, size, cost)
             # Store evicted keys for retrieval via get()
             self._eviction_queue.extend(evicted)
 
-    def get(self) -> Any:
-        """Get the next key to evict.
+    def next_victim(self, obj: Any = None) -> Any:
+        """Return the next key to evict (renamed from get() to avoid
+        semantic collision with upstream ``MemoryCacheEviction.get(obj)``
+        which returns a stored value, not an eviction key).
 
         In the GDSF model, evictions happen proactively during put(). This
         method returns keys that have already been evicted during the last
         put() call(s). If no evictions are pending, it evicts the lowest
         priority item.
+
+        Args:
+            obj: Unused; present to match the GPTCache ``EvictionBase.get``
+                signature (which accepts a positional argument).
 
         Returns:
             The key of the evicted entry, or None if cache is empty.
@@ -223,6 +238,22 @@ class GDSFEvictionPlugin(EvictionBase):
 
         # If called independently (not after a put), evict the lowest priority
         return self._manager.evict_one()
+
+    def get(self, obj: Any = None) -> Any:
+        """Deprecated alias for :meth:`next_victim`. Kept for backwards
+        compatibility with the existing GPTCache ``EvictionBase`` interface.
+        """
+        return self.next_victim(obj)
+
+    @property
+    def policy(self) -> str:
+        """Name of the eviction policy exposed by this plugin.
+
+        GPTCache's ``EvictionBase`` requires every subclass to advertise a
+        ``policy`` string. We return the canonical GDSF identifier so the
+        plugin can be selected via GPTCache's factory (``policy="GDSF"``).
+        """
+        return "GDSF"
 
     def is_evict(self) -> bool:
         """Check whether eviction is needed.

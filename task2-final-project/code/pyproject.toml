@@ -47,8 +47,8 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/nissimbrami/cost-aware-eviction-gptcache"
-Issues = "https://github.com/nissimbrami/cost-aware-eviction-gptcache/issues"
+Repository = "https://github.com/nissimbrami/caching-course-project"
+Issues = "https://github.com/nissimbrami/caching-course-project/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -6,10 +6,10 @@ Sweeps over combinations of alpha (frequency exponent) and beta (cost exponent)
 to measure their effect on cost-weighted hit rate (CWHR).
 
 Configuration:
-    - alpha values: [0.0, 0.5, 1.0, 1.5, 2.0]
-    - beta values:  [0.0, 0.5, 1.0, 1.5, 2.0]
+    - alpha values: [0.5, 0.8, 1.0, 1.2, 1.5, 2.0]
+    - beta values:  [0.5, 0.8, 1.0, 1.2, 1.5, 2.0]
     - Fixed workload: high_variance_cost
-    - Fixed cache size: 1000
+    - Fixed cache size: 10000 bytes (small enough for eviction to bite)
     - Repetitions: 10 runs per (alpha, beta) pair
 
 Output:
@@ -17,7 +17,7 @@ Output:
       alpha, beta, run, hit_rate, cwhr, savings_dollar, latency_ms
 
 Usage:
-    python scripts/run_ablation.py --cache-size 1000 --num-runs 10 --output-dir results/ablation
+    python scripts/run_ablation.py --cache-size 100000 --num-runs 10 --output-dir results/ablation
 """
 
 import argparse
@@ -34,6 +34,8 @@ from tqdm import tqdm
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+from benchmarks.policies import GDSFPolicy
 
 
 def estimate_query_cost(num_tokens: int, model: str = "gpt-3.5-turbo") -> float:
@@ -128,96 +130,6 @@ def generate_workload(
     return queries
 
 
-class GDSFCache:
-    """Greedy Dual-Size Frequency (GDSF) cache implementation.
-
-    Priority formula:
-        priority(entry) = L + freq(entry)^alpha * cost(entry)^beta / size(entry)
-
-    Where:
-        L = clock value (aging factor)
-        freq = access frequency since insertion
-        cost = dollar cost of regenerating the response
-        size = memory footprint
-        alpha = frequency sensitivity exponent
-        beta = cost sensitivity exponent
-    """
-
-    def __init__(self, max_size: int, alpha: float = 1.0, beta: float = 1.0):
-        self.max_size = max_size
-        self.alpha = alpha
-        self.beta = beta
-        self.clock = 0.0  # Aging clock L
-
-        # Cache storage: query_id -> entry dict
-        self.cache: dict[int, dict] = {}
-        # Priority values: query_id -> priority
-        self.priorities: dict[int, float] = {}
-        # Access frequencies: query_id -> count
-        self.frequencies: dict[int, int] = {}
-
-    def _compute_priority(self, entry: dict) -> float:
-        """Compute GDSF priority for an entry.
-
-        Formula: Priority(i) = Clock + (freq^alpha * cost^beta) / size
-        This matches the main eviction_manager.py implementation exactly.
-        """
-        freq = self.frequencies.get(entry["query_id"], 1)
-        cost = entry["cost"]
-        size = entry["size"]
-
-        # Match main implementation: freq^alpha * cost^beta / size
-        freq_factor = freq ** self.alpha
-        cost_factor = cost ** self.beta
-        size_factor = max(size, 1)
-
-        priority = self.clock + (freq_factor * cost_factor) / size_factor
-        return priority
-
-    def access(self, query: dict) -> bool:
-        """Process a cache access. Returns True if hit, False if miss."""
-        query_id = query["query_id"]
-
-        if query_id in self.cache:
-            # Cache hit: update frequency and priority
-            self.frequencies[query_id] += 1
-            self.priorities[query_id] = self._compute_priority(self.cache[query_id])
-            return True
-
-        # Cache miss: insert (possibly after eviction)
-        self._insert(query)
-        return False
-
-    def _insert(self, query: dict) -> None:
-        """Insert a new entry, evicting if necessary."""
-        query_id = query["query_id"]
-
-        # Evict if at capacity
-        while len(self.cache) >= self.max_size:
-            self._evict()
-
-        # Insert new entry
-        self.cache[query_id] = query
-        self.frequencies[query_id] = 1
-        self.priorities[query_id] = self._compute_priority(query)
-
-    def _evict(self) -> None:
-        """Evict the entry with the lowest priority."""
-        if not self.priorities:
-            return
-
-        # Find minimum priority entry
-        victim_id = min(self.priorities, key=self.priorities.get)
-
-        # Update clock to victim's priority (aging mechanism)
-        self.clock = self.priorities[victim_id]
-
-        # Remove victim
-        del self.cache[victim_id]
-        del self.priorities[victim_id]
-        del self.frequencies[victim_id]
-
-
 class BaselineCache:
     """Simple LRU/LFU/FIFO baseline for comparison (not used in ablation)."""
 
@@ -271,10 +183,14 @@ def run_single_experiment(
 ) -> dict:
     """Run a single GDSF experiment and return metrics.
 
+    Uses the canonical GDSFPolicy from benchmarks.policies, which wraps
+    src.cost_aware_eviction.GDSFEvictionManager. Capacity is measured in
+    bytes (matching the main plugin and the rest of the benchmark suite).
+
     Returns:
         dict with keys: hit_rate, cwhr, savings_dollar, latency_ms
     """
-    cache = GDSFCache(max_size=cache_size, alpha=alpha, beta=beta)
+    cache = GDSFPolicy(max_size=cache_size, alpha=alpha, beta=beta)
 
     hits = 0
     total = 0
@@ -293,7 +209,8 @@ def run_single_experiment(
         total += 1
         total_cost += query["cost"]
 
-        is_hit = cache.access(query)
+        key = str(query["query_id"])
+        is_hit = cache.access(key)
 
         if is_hit:
             hits += 1
@@ -301,6 +218,8 @@ def run_single_experiment(
             total_savings += query["cost"]
             latency = hit_latency_base + rng.exponential(2.0)
         else:
+            # Miss: insert with byte size and dollar cost
+            cache.put(key, size=query["size"], cost=query["cost"])
             latency = miss_latency_base + rng.exponential(50.0)
 
         latencies.append(latency)
@@ -320,7 +239,7 @@ def run_single_experiment(
 
 
 def run_ablation_study(
-    cache_size: int = 1000,
+    cache_size: int = 100000,
     num_runs: int = 10,
     num_queries: int = 5000,
     workload_type: str = "high_variance_cost",
@@ -336,14 +255,14 @@ def run_ablation_study(
     Returns:
         DataFrame with columns: alpha, beta, run, hit_rate, cwhr, savings_dollar, latency_ms
     """
-    alpha_values = [0.0, 0.5, 1.0, 1.5, 2.0]
-    beta_values = [0.0, 0.5, 1.0, 1.5, 2.0]
+    alpha_values = [0.5, 0.8, 1.0, 1.2, 1.5, 2.0]
+    beta_values = [0.5, 0.8, 1.0, 1.2, 1.5, 2.0]
 
     total_experiments = len(alpha_values) * len(beta_values) * num_runs
     print(f"Running ablation study:")
     print(f"  Alpha values: {alpha_values}")
     print(f"  Beta values:  {beta_values}")
-    print(f"  Cache size:   {cache_size}")
+    print(f"  Cache size:   {cache_size} bytes")
     print(f"  Num runs:     {num_runs}")
     print(f"  Workload:     {workload_type}")
     print(f"  Queries/run:  {num_queries}")
@@ -418,8 +337,8 @@ def main():
     parser.add_argument(
         "--cache-size",
         type=int,
-        default=int(os.environ.get("CACHE_SIZE", "1000")),
-        help="Cache size (number of entries). Default: 1000",
+        default=int(os.environ.get("CACHE_SIZE", "10000")),
+        help="Cache size in bytes. Default: 10000 (small enough for eviction).",
     )
     parser.add_argument(
         "--num-runs",

@@ -1,27 +1,12 @@
 {
-  "n_runs": 30,
-  "cache_sizes": [
-    50000,
-    100000,
-    250000,
-    500000
-  ],
-  "policies": [
-    "LRU",
-    "FIFO",
-    "LFU",
-    "Random",
-    "GDSF"
-  ],
-  "workloads": [
-    "uniform_cost",
-    "high_variance_cost",
-    "zipf_variable_cost",
-    "bursty",
-    "adversarial_lru",
-    "size_varying"
-  ],
-  "seed": 42,
-  "elapsed_seconds": 53.07086801528931,
-  "timestamp": "2026-07-21 19:11:13"
+  "canonical_run": {
+    "output_json": "benchmark_results_20260721_191113.json",
+    "n_runs": 30,
+    "cache_sizes_bytes": [50000, 100000, 250000, 500000],
+    "policies": ["LRU", "FIFO", "LFU", "Random", "GDSF(a=1.0,b=1.0)"],
+    "workloads": ["uniform_cost", "high_variance_cost", "zipf_variable_cost", "bursty", "adversarial_lru", "size_varying"],
+    "total_rows": 3600,
+    "seed_range": "0..29"
+  },
+  "note": "Prior benchmark_config.json described a smoke run; canonical provenance is the block above."
 }

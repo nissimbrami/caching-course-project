@@ -22,8 +22,8 @@ result is to the α (frequency) and β (cost) exponents.
 ## Quick start
 
 ```bash
-git clone https://github.com/nissimbrami/cost-aware-eviction-gptcache.git
-cd cost-aware-eviction-gptcache
+git clone https://github.com/nissimbrami/caching-course-project.git
+cd caching-course-project/task2-final-project/code
 docker compose up --build
 ```
 
@@ -121,7 +121,7 @@ Environment variables read by `scripts/run_all.sh`:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CACHE_SIZE` | `1000` | max entries per cache |
+| `CACHE_SIZE` | `100000` | maximum cache capacity in bytes |
 | `NUM_RUNS` | `30` | repetitions per (policy, workload, size) |
 | `ALPHA` | `1.0` | frequency exponent |
 | `BETA` | `1.0` | cost exponent |

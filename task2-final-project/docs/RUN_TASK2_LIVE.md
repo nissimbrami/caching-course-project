@@ -53,7 +53,7 @@ What the script actually does, stage by stage:
 | 3 | `GDSFEvictionPlugin` implements GPTCache's `EvictionBase` (open-source extension) | `isinstance(plugin, EvictionBase) = True`, `policy = GDSF` |
 | 4 | LRU vs GDSF on a small workload | `LRU cwhr=0.261` vs `GDSF cwhr=0.481` (GDSF ~2× better on cost-weighted metric) |
 | 5 | Statistics in the paper reproduce from JSON | `mean_diff = 0.118999`, `paired_t = 13.85`, `p_bonferroni = 8.600e-26`, `BCa CI = [0.102430, 0.135792]` — matches report exactly |
-| 6 | 300/300 unit tests pass | `============ 300 passed in ~43s =============` |
+| 6 | 304/304 unit tests pass | `============ 304 passed in ~83s =============` |
 | 7 | Compiled report PDF exists | `pages = 8   bytes = 669656` |
 | 8 | Result artefacts present | 1 benchmark JSON + 1 stats JSON + 2 ablation CSVs + 4 PNGs on disk (all 4 embedded in report) |
 
@@ -156,7 +156,7 @@ python -m pytest tests/ -q --hypothesis-seed=1          # fixed seed
 python -m pytest tests/ -q --hypothesis-seed=2          # fixed seed
 ```
 
-Expected: `300 passed` for each command.
+Expected: `304 passed` for each command.
 
 ### 2.8 Report PDF
 

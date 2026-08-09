@@ -388,7 +388,7 @@ Plus a substantial amount of supporting code:
   (O(log n) priority updates) with a single `Lock` for thread
   safety. Wired into GPTCache's `EvictionBase` factory as
   `policy="GDSF"`.
-- `task2-final-project/code/tests/` — **300 unit tests**,
+- `task2-final-project/code/tests/` — **304 unit tests**,
   all passing. Cover factory wiring, backwards-compat API,
   cost-aware ranking, size penalization, clock monotonicity,
   tie-breaking, input validation.

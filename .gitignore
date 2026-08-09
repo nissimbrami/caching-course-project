@@ -48,3 +48,11 @@ task2-final-project/report-latex/*.toc
 task2-final-project/report-latex/*.synctex.gz
 task2-final-project/report-latex/*.fdb_latexmk
 task2-final-project/report-latex/*.fls
+
+# PROJECT_OVERVIEW LaTeX intermediates
+docs/PROJECT_OVERVIEW.aux
+docs/PROJECT_OVERVIEW.log
+docs/PROJECT_OVERVIEW.out
+
+# Ephemeral text export of report
+task2-final-project/report-latex/report.txt

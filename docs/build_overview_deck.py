@@ -288,7 +288,7 @@ def build():
                                  "L = clock counter to prevent starvation."),
                                 ("What we ship",
                                  "PR-ready branch fork of GPTCache: 1074-line plugin, "
-                                 "259 unit tests, benchmark harness, 3600-run study, "
+                                 "304 unit tests, benchmark harness, 3600-run study, "
                                  "8-page ACM sigconf paper.")])))
     slides.append(("bullets", ("Results (3600 runs, paired-t + Bonferroni + BCa bootstrap)",
                                [("Per-workload cost-weighted savings vs LRU baseline",
